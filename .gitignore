@@ -1,0 +1,39 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# local/vendor files
+atlas_docker-env/
+local/
+vendor/
+
+# databases/logs
+*.db
+*.sqlite
+*.sqlite3
+data/
+logs/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# JS / Flutter
+node_modules/
+.dart_tool/
+build/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# binary/archive
+*.tgz
+*.tar
+*.tar.gz
+*.img
+*.iso
