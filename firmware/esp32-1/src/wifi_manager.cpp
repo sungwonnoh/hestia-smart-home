@@ -51,6 +51,7 @@ void WifiManager::tick() {                  //loop() 안에서 초당 수십번 
             logWarn("WIFI", "attempt timed out, retry in %lums",
                     (unsigned long)backoffMs_);
             state_ = WifiState::Disconnected;
+            lastAttempt_ = now;  
         }
         break;
 
