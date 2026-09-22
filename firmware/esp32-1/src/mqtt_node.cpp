@@ -4,7 +4,11 @@
 #include "payload.h"
 #include <espMqttClient.h>
 
-static espMqttClient s_mqtt;
+// 내부 태스크를 끄고, loop()는 MqttNode::tick()에서만 돌림
+// 인자 없는 생성자는 priority/core를 받는 쪽이 잡혀 내부 태스크가 켜지고,
+// 라이브러리 태스크와 우리 loop이 같은 상태 기계를 동시에 돌려
+// TCP 소켓이 두 개 열리고 성공한 연결을 스스로 닫음
+static espMqttClient s_mqtt(espMqttClientTypes::UseInternalTask::NO);
 
 MqttNode::MqttNode(WifiManager& wifi, const char* host, uint16_t port)
     : wifi_(wifi),
@@ -55,15 +59,20 @@ void MqttNode::handleConnect() {
 }
 
 void MqttNode::handleDisconnect(int reason) {
+    uint32_t now = millis();
+
     if (state_ == MqttState::Connected) {
         logWarn("MQTT", "disconnected, reason=%d", reason);
-        backoffMs_   = BACKOFF_MIN_MS;
-        lastAttempt_ = millis();
-    } else {
+        backoffMs_ = BACKOFF_MIN_MS;
+    } else if (state_ == MqttState::Connecting) {
         logWarn("MQTT", "connect failed, reason=%d, retry in %lums",
                 reason, (unsigned long)backoffMs_);
+    } else {
+        return;          // 이미 Disconnected — 중복 콜백 무시
     }
-    state_ = MqttState::Disconnected;
+
+    lastAttempt_ = now;
+    state_       = MqttState::Disconnected;
 }
 
 void MqttNode::tick() {
