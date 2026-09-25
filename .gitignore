@@ -37,3 +37,8 @@ build/
 *.tar.gz
 *.img
 *.iso
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
