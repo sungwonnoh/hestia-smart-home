@@ -10,9 +10,9 @@ import sys
 import paho.mqtt.client as mqtt
 
 from clock import Clock, RealClock
+from kde_context import get_meal_time_context
 from model_ingest import ingest_model_message
 from model_store import ModelStore
-from kde_context import get_meal_time_context
 
 
 BROKER = "127.0.0.1"
@@ -29,6 +29,35 @@ class ContextEngine:
         # RPi4에서 전달받은 최신 학습 모델 저장
         self.model_store = ModelStore()
 
+    def ingest(
+        self,
+        topic: str,
+        payload: dict,
+    ) -> None:
+        """모든 입력의 단일 진입점.
+
+        실제 MQTT와 Replay가 동일한 처리 경로를 사용한다.
+        """
+
+        if topic.startswith("hestia/model/"):
+            handled = self.handle_model(
+                topic,
+                payload,
+            )
+
+            if not handled:
+                print(
+                    f"[MODEL] unsupported topic: {topic}",
+                    flush=True,
+                )
+
+            return
+
+        self.handle_event(
+            topic,
+            payload,
+        )
+
     def handle_event(
         self,
         topic: str,
@@ -37,14 +66,13 @@ class ContextEngine:
         """센서 이벤트 하나를 처리한다.
 
         MQTT와 무관한 순수 함수에 가깝게 유지한다.
-        리플레이 하네스는 이 메서드를 직접 호출한다.
+        리플레이 하네스는 ingest()를 통해 이 메서드에 도달한다.
         """
 
         now = self.clock.now()
 
-        # TODO:
-        # 최종 MQTT 명세에서는 RPi5의 recv_ts를 기준으로
-        # 판단해야 한다.
+        # 현재는 기존 구조를 유지.
+        # 최종 MQTT 명세에서는 recv_ts 기준으로 판단하도록 확장 예정.
         event_ts = payload.get(
             "ts",
             now,
@@ -157,37 +185,18 @@ def make_mqtt_client(
             )
             return
 
-        # Learning Engine 모델
-        if msg.topic.startswith(
-            "hestia/model/"
-        ):
-            try:
-                handled = engine.handle_model(
-                    msg.topic,
-                    payload,
-                )
+        try:
+            engine.ingest(
+                msg.topic,
+                payload,
+            )
 
-                if not handled:
-                    print(
-                        f"[MODEL] unsupported topic: "
-                        f"{msg.topic}",
-                        flush=True,
-                    )
-
-            except ValueError as e:
-                print(
-                    f"[MODEL] invalid payload "
-                    f"{msg.topic}: {e}",
-                    flush=True,
-                )
-
-            return
-
-        # 기존 센서 이벤트
-        engine.handle_event(
-            msg.topic,
-            payload,
-        )
+        except ValueError as e:
+            print(
+                f"[INGEST] invalid payload "
+                f"{msg.topic}: {e}",
+                flush=True,
+            )
 
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2

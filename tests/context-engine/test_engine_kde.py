@@ -136,3 +136,40 @@ def test_engine_without_kde():
         context["tail_probability"]
         is None
     )
+    
+def test_engine_ingest_routes_kde():
+    engine = ContextEngine(
+        clock=FakeClock()
+    )
+
+    engine.ingest(
+        "hestia/model/kde",
+        build_fake_kde_payload(),
+    )
+
+    assert (
+        engine.model_store.has_kde()
+        is True
+    )
+
+    model = (
+        engine.model_store.get_kde()
+    )
+
+    assert model is not None
+    assert model.sample_days == 212
+
+
+def test_engine_ingest_accepts_sensor():
+    engine = ContextEngine(
+        clock=FakeClock()
+    )
+
+    engine.ingest(
+        "hestia/sensor/vs-03/state",
+        {
+            "version": 1,
+            "type": "motion",
+            "motion": True,
+        },
+    )

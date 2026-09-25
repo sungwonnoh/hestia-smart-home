@@ -39,8 +39,10 @@ def replay(path: str) -> None:
 
     for ev in events:
         clock.advance(ev["ts"])
-        engine.handle_event(ev["topic"], ev["payload"])
-
+        engine.ingest(
+            ev["topic"],
+            ev["payload"],
+        )
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
