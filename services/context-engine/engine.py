@@ -11,6 +11,7 @@ import paho.mqtt.client as mqtt
 
 from clock import Clock, RealClock
 from kde_context import get_meal_time_context
+from meal_policy import evaluate_meal_policy
 from model_ingest import ingest_model_message
 from model_store import ModelStore
 
@@ -63,16 +64,12 @@ class ContextEngine:
         topic: str,
         payload: dict,
     ) -> None:
-        """센서 이벤트 하나를 처리한다.
-
-        MQTT와 무관한 순수 함수에 가깝게 유지한다.
-        리플레이 하네스는 ingest()를 통해 이 메서드에 도달한다.
-        """
+        """센서 이벤트 하나를 처리한다."""
 
         now = self.clock.now()
 
-        # 현재는 기존 구조를 유지.
-        # 최종 MQTT 명세에서는 recv_ts 기준으로 판단하도록 확장 예정.
+        # 현재는 기존 구조 유지.
+        # 최종 명세에서는 recv_ts 기준으로 판단하도록 확장 예정.
         event_ts = payload.get(
             "ts",
             now,
@@ -87,8 +84,8 @@ class ContextEngine:
         )
 
         # TODO: FSM 상태 전이
-        # TODO: KDE Context 조회 후 Policy 연결
-        # TODO: 이상 판정
+        # TODO: World State 갱신
+        # TODO: Policy 연결
 
     def handle_model(
         self,
@@ -126,6 +123,42 @@ class ContextEngine:
             self.model_store,
             query_time,
         )
+
+    def evaluate_meal_intervention(
+        self,
+        query_time: str,
+    ) -> dict:
+        """현재 시각 기준 KDE 기반 meal 개입 후보를 계산한다."""
+
+        context = self.get_meal_kde_context(
+            query_time
+        )
+
+        if not context["available"]:
+            return {
+                "available": False,
+                "candidate": False,
+                "tail_probability": None,
+                "predictability": None,
+                "reason": "KDE_MODEL_UNAVAILABLE",
+            }
+
+        result = evaluate_meal_policy(
+            tail_probability=context[
+                "tail_probability"
+            ],
+            predictability=context[
+                "predictability"
+            ],
+        )
+
+        return {
+            "available": True,
+            "candidate": result.candidate,
+            "tail_probability": result.tail_probability,
+            "predictability": result.predictability,
+            "reason": result.reason,
+        }
 
 
 def make_mqtt_client(

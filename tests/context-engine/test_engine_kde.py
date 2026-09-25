@@ -173,3 +173,50 @@ def test_engine_ingest_accepts_sensor():
             "motion": True,
         },
     )
+def test_engine_meal_policy_candidate():
+    engine = ContextEngine(
+        clock=FakeClock()
+    )
+
+    engine.handle_model(
+        "hestia/model/kde",
+        build_fake_kde_payload(),
+    )
+
+    result = (
+        engine.evaluate_meal_intervention(
+            "09:40"
+        )
+    )
+
+    assert (
+        result["available"]
+        is True
+    )
+
+
+def test_engine_meal_policy_without_model():
+    engine = ContextEngine(
+        clock=FakeClock()
+    )
+
+    result = (
+        engine.evaluate_meal_intervention(
+            "09:40"
+        )
+    )
+
+    assert (
+        result["available"]
+        is False
+    )
+
+    assert (
+        result["candidate"]
+        is False
+    )
+
+    assert (
+        result["reason"]
+        == "KDE_MODEL_UNAVAILABLE"
+    )
