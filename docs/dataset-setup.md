@@ -154,3 +154,22 @@ breakfast_preparation.csv
 ```
 
 대신 이 문서의 절차를 통해 동일한 데이터를 다시 생성합니다.
+
+---
+
+## Current Limitation
+
+현재 `breakfast_preparation.csv`는 실제 `Breakfast` 라벨이 아니라
+다음 규칙으로 생성한 MVP용 Proxy 데이터입니다.
+
+```text
+05:00 ~ 11:00
++
+하루 첫 Meal_Preparation begin
+```
+
+따라서 현재 KDE는 전체 `meal_time` 패턴을 완전히 반영하는 모델이 아니라,
+아침 Meal Preparation 패턴을 이용한 초기 검증 모델입니다.
+
+향후에는 breakfast / lunch / dinner를 포함한 전체 Meal 이벤트를 이용해
+`meal_time`을 multi-modal distribution으로 확장할 예정입니다.

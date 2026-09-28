@@ -1,5 +1,6 @@
 from pathlib import Path
 import csv
+import json
 from datetime import datetime
 
 import numpy as np
@@ -10,52 +11,34 @@ DATA_PATH = Path(
     "data/processed/aruba/breakfast_preparation.csv"
 )
 
-BREAKFAST_START = 5.0
-BREAKFAST_END = 11.0
+# MQTT 명세:
+# 자정 기준, 15분 간격
+GRID_MIN = 0
+GRID_STEP = 15
+GRID_SIZE = 24 * 60 // GRID_STEP  # 96칸
 
-TAIL_THRESHOLD = 0.05
-PREDICTABILITY_THRESHOLD = 0.05
 
-
-def time_to_float(time_str):
+def time_to_minutes(time_str: str) -> float:
     """
-    예:
-    07:30:00 -> 7.5
-    08:15:00 -> 8.25
+    07:30:00 -> 450분
     """
-
     t = datetime.strptime(
         time_str,
         "%H:%M:%S.%f",
     )
 
     return (
-        t.hour
-        + t.minute / 60
-        + t.second / 3600
-        + t.microsecond / 3_600_000_000
+        t.hour * 60
+        + t.minute
+        + t.second / 60
+        + t.microsecond / 60_000_000
     )
 
 
-def float_to_time(value):
+def load_times() -> np.ndarray:
     """
-    7.5 -> 07:30
-    """
-
-    hour = int(value)
-    minute = int(round((value - hour) * 60))
-
-    if minute == 60:
-        hour += 1
-        minute = 0
-
-    return f"{hour:02d}:{minute:02d}"
-
-
-def load_times():
-    """
-    breakfast_preparation.csv에서
-    시간 데이터만 읽어 float 배열로 반환
+    breakfast_preparation.csv의 시각을
+    자정 기준 분(minute) 단위로 읽는다.
     """
 
     times = []
@@ -65,33 +48,64 @@ def load_times():
 
         for row in reader:
             times.append(
-                time_to_float(row["time"])
+                time_to_minutes(row["time"])
             )
 
     return np.array(times)
 
 
-def calculate_predictability(kde):
-    """
-    KDE 분포의 entropy를 이용해
-    생활 패턴의 규칙성을 계산한다.
+def fit_kde(times: np.ndarray):
+    if len(times) < 2:
+        raise ValueError(
+            "KDE 계산을 위한 데이터가 부족합니다."
+        )
 
-    값이 높을수록 규칙적
-    값이 낮을수록 불규칙
+    return gaussian_kde(times)
+
+
+def build_density(kde) -> list[float]:
+    """
+    하루를 15분 단위 96칸으로 나누고
+    각 칸의 KDE density를 계산한다.
+
+    최종 배열의 합은 1.0이 되도록 정규화한다.
     """
 
-    grid = np.linspace(
-        BREAKFAST_START,
-        BREAKFAST_END,
-        300,
+    # 각 bin 중앙 시각
+    grid = (
+        np.arange(GRID_SIZE) * GRID_STEP
+        + GRID_STEP / 2
     )
 
     density = kde(grid)
 
-    # density를 확률분포 형태로 정규화
-    probability = density / density.sum()
+    density_sum = density.sum()
 
-    # log(0) 방지
+    if density_sum == 0:
+        raise ValueError(
+            "KDE density 합이 0입니다."
+        )
+
+    normalized_density = (
+        density / density_sum
+    )
+
+    return normalized_density.tolist()
+
+
+def calculate_predictability(
+    density: list[float],
+) -> float:
+    """
+    정규화된 density 배열의 entropy를 이용해
+    predictability를 계산한다.
+
+    1에 가까울수록 규칙적,
+    0에 가까울수록 불규칙.
+    """
+
+    probability = np.array(density)
+
     probability = probability[
         probability > 0
     ]
@@ -100,7 +114,7 @@ def calculate_predictability(kde):
         probability * np.log(probability)
     )
 
-    max_entropy = np.log(len(grid))
+    max_entropy = np.log(GRID_SIZE)
 
     normalized_entropy = (
         entropy / max_entropy
@@ -110,250 +124,47 @@ def calculate_predictability(kde):
         1 - normalized_entropy
     )
 
-    return predictability
+    return float(predictability)
 
 
-def calculate_tail_probability(
-    kde,
-    query_time,
-):
+def build_model() -> dict:
     """
-    query_time보다 늦게
-    Breakfast Preparation이 발생할
-    KDE 확률을 계산한다.
+    MQTT payload에 들어갈 KDE 모델 부분을 생성한다.
     """
 
-    total_probability = (
-        kde.integrate_box_1d(
-            BREAKFAST_START,
-            BREAKFAST_END,
-        )
-    )
-
-    tail_probability = (
-        kde.integrate_box_1d(
-            query_time,
-            BREAKFAST_END,
-        )
-    )
-
-    if total_probability == 0:
-        return 0.0
-
-    return (
-        tail_probability
-        / total_probability
-    )
-
-
-def parse_query_time(query_time_str):
-    """
-    "09:40" -> 9.666...
-    """
-
-    t = datetime.strptime(
-        query_time_str,
-        "%H:%M",
-    )
-
-    return (
-        t.hour
-        + t.minute / 60
-    )
-
-
-def make_decision(
-    tail_probability,
-    predictability,
-):
-    """
-    개입 조건:
-
-    1. 현재 시각이 평소 패턴의
-       상위 5%보다 늦음
-
-    AND
-
-    2. 사용자 패턴이 충분히 규칙적임
-    """
-
-    time_anomaly = (
-        tail_probability
-        < TAIL_THRESHOLD
-    )
-
-    pattern_reliable = (
-        predictability
-        >= PREDICTABILITY_THRESHOLD
-    )
-
-    if (
-        time_anomaly
-        and pattern_reliable
-    ):
-        decision = "INTERVENE"
-    else:
-        decision = "NORMAL"
-
-    return (
-        decision,
-        time_anomaly,
-        pattern_reliable,
-    )
-
-
-def analyze(query_time_str):
     times = load_times()
 
-    if len(times) < 2:
-        raise ValueError(
-            "KDE 계산을 위한 데이터가 부족합니다."
-        )
+    kde = fit_kde(times)
 
-    query_time = parse_query_time(
-        query_time_str
-    )
+    density = build_density(kde)
 
-    if not (
-        BREAKFAST_START
-        <= query_time
-        <= BREAKFAST_END
-    ):
-        raise ValueError(
-            f"테스트 시각은 "
-            f"{BREAKFAST_START:02.0f}:00~"
-            f"{BREAKFAST_END:02.0f}:00 "
-            f"범위여야 합니다."
-        )
-
-    # KDE 생성
-    kde = gaussian_kde(times)
-
-    # 기본 통계
-    mean = np.mean(times)
-
-    std_hours = np.std(times)
-
-    std_minutes = (
-        std_hours * 60
-    )
-
-    # KDE 기반 이상도
-    tail_probability = (
-        calculate_tail_probability(
-            kde,
-            query_time,
-        )
-    )
-
-    # 규칙성
     predictability = (
-        calculate_predictability(
-            kde
-        )
+        calculate_predictability(density)
     )
 
-    # 최종 판단
-    (
-        decision,
-        time_anomaly,
-        pattern_reliable,
-    ) = make_decision(
-        tail_probability,
-        predictability,
-    )
-
-    print()
-    print(
-        "===== HESTIA KDE BASELINE ====="
-    )
-    print()
-
-    print(
-        f"Observed days       : "
-        f"{len(times)}"
-    )
-
-    print(
-        f"Mean                : "
-        f"{float_to_time(mean)}"
-    )
-
-    print(
-        f"Std                 : "
-        f"{std_minutes:.1f} min"
-    )
-
-    print()
-
-    print(
-        f"Query               : "
-        f"{query_time_str}"
-    )
-
-    print(
-        f"Tail probability    : "
-        f"{tail_probability * 100:.2f}%"
-    )
-
-    print(
-        f"Predictability      : "
-        f"{predictability:.3f}"
-    )
-
-    print()
-
-    print(
-        f"Tail threshold      : "
-        f"{TAIL_THRESHOLD:.2f}"
-    )
-
-    print(
-        f"Predict threshold   : "
-        f"{PREDICTABILITY_THRESHOLD:.2f}"
-    )
-
-    print()
-
-    print(
-        f"Time anomaly        : "
-        f"{'YES' if time_anomaly else 'NO'}"
-    )
-
-    print(
-        f"Pattern reliable    : "
-        f"{'YES' if pattern_reliable else 'NO'}"
-    )
-
-    print()
-
-    print(
-        f"Decision            : "
-        f"{decision}"
-    )
-
-    print()
+    return {
+        "sample_days": len(times),
+        "distributions": {
+            "meal_time": {
+                "grid_min": GRID_MIN,
+                "grid_step": GRID_STEP,
+                "density": density,
+            }
+        },
+        "predictability": {
+            "meal_time": predictability,
+        },
+    }
 
 
 if __name__ == "__main__":
-    import argparse
+    model = build_model()
 
-    parser = argparse.ArgumentParser(
-        description=(
-            "HESTIA KDE-based "
-            "personal baseline analyzer"
+    print(
+        json.dumps(
+            model,
+            indent=2,
+            ensure_ascii=False,
         )
     )
-
-    parser.add_argument(
-        "--time",
-        required=True,
-        help=(
-            "테스트 시각 "
-            "(HH:MM, 예: 09:40)"
-        ),
-    )
-
-    args = parser.parse_args()
-
-    analyze(args.time)
+    
