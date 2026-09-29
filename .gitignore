@@ -12,7 +12,7 @@ vendor/
 *.db
 *.sqlite
 *.sqlite3
-data/
+data/raw/
 logs/
 
 # Python
