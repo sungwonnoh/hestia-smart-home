@@ -525,6 +525,7 @@ class RegistryEntry:
     node_id: str | None = None           # LWT 연결 (센서만)
     channel: bool = False                # 알림 채널 사용 가능 (가전만)
     enabled: bool = True                 # false 면 판단에서 제외
+    power_profile: str | None = None     # 전력 센서가 붙은 기기 (policy 의 [power.*] 키)
 
 
 @dataclass(frozen=True, slots=True)
@@ -609,6 +610,7 @@ def parse_registry(payload: dict, base: dict) -> RegistryDevices:
                 node_id=_opt(item, "node_id", str),
                 channel=_opt(item, "channel", bool, False),
                 enabled=_opt(item, "enabled", bool, True),
+                power_profile=_opt(item, "power_profile", str),
             )
         )
     return RegistryDevices(**base, devices=tuple(entries))
