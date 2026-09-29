@@ -1,0 +1,12 @@
+[project]
+name = "hestia-engine"
+version = "0.1.0"
+description = "HESTIA Context Engine (RPi5)"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
