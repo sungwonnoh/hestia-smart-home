@@ -1,0 +1,179 @@
+# HESTIA 판단 기준값 — 집과 무관한 공통 정책
+#
+# 집별 배치는 config/homes/*.toml 에 있다. 이 파일은 모든 집이 공유한다.
+#
+# 여기 값은 대부분 **임시값**이다. 확정 근거가 둘인데 아직 없다.
+#   - 벤치 측정 (B-9~B-13): 센서 노이즈, 홀드타임, 트리거 밀도
+#   - Replay 스윕 (H-5): 임계값 조합을 돌려 오탐/미탐 균형 찾기
+# 그래서 코드에 박지 않고 여기 둔다.
+
+
+# ============================================================ 전력 판정
+#
+# 명세: state 는 선택 필드. 노드가 판정 가능하면 채우고,
+#       없으면 RPi5 가 watt 와 이 임계값으로 판정한다.
+#
+#   watt <= standby_max_w                 → STANDBY
+#   watt >= on_min_w                      → ON
+#   ON 상태에서 watt < on_exit_w 로 떨어지면  → 내려감 (히스테리시스)
+#   모든 전이는 min_hold_sec 이상 지속돼야 인정
+#
+# 키는 센서 ID 가 아니라 homes/*.toml 의 power_profile 라벨이다.
+# "인덕션의 ON 기준은 300W"는 공통 지식이고,
+# "이 집의 vs-06 이 인덕션"은 집별 정보이므로 파일을 나눈다.
+# 라벨이 없거나 여기 없는 라벨이면 default 를 쓴다.
+
+[power.default]
+standby_max_w = 5
+on_min_w = 50
+on_exit_w = 30
+min_hold_sec = 10
+
+[power.induction]               # 대기 10W, 조리 1000~2000W
+standby_max_w = 10
+on_min_w = 300
+on_exit_w = 150
+min_hold_sec = 15
+
+[power.microwave]               # 짧게 쓰므로 hold 를 줄인다
+standby_max_w = 3
+on_min_w = 500
+on_exit_w = 300
+min_hold_sec = 5
+
+
+# ============================================================ 재실 판정
+#
+# 명세의 confidence 가 여기서 쓰인다.
+#   mmWave (high) — 정지 상태도 감지하므로 present=false 를 즉시 신뢰
+#   PIR   (low)  — 정지한 사람을 놓치므로 무반응 N분 후 이석 판정
+
+[presence]
+mmwave_absent_grace_sec = 30      # mmWave present=false 후 이 시간 뒤 이석 확정
+pir_absent_timeout_sec = 300      # PIR 무반응이 이만큼 지속되면 이석 판정
+area_switch_min_sec = 20          # 구역 전환 최소 지속 (오가는 떨림 방지)
+
+# mmWave energy 임계 — 명세: "정지/미세움직임 판정은 노드가 아니라 RPi5 가"
+[presence.energy]
+still_max = 10                    # 이 이하면 정지
+active_min = 30                   # 이 이상이면 활동 중
+
+# 화장실 쓰러짐 후보 — present=true 인데 energy 가 계속 바닥
+[presence.fall_watch]
+enabled = true
+areas = ["bathroom"]
+still_duration_sec = 600          # 10분간 정지 상태 지속
+escalate_after_sec = 1800         # 30분이면 SAFETY 시나리오
+
+
+# ============================================================ activity 판정
+#
+# 15종 상태의 점수 계산 파라미터.
+# 실제 가중치는 2단계에서 규칙을 만들며 채운다. 지금은 공통 항목만.
+
+[activity]
+min_score = 0.35                  # 이 미만이면 UNKNOWN (open-set)
+hysteresis_bonus = 0.10           # 현재 상태 유지에 주는 가산점
+min_hold_sec = 60                 # 상태 최소 지속
+
+[activity.meal]
+# EATING 판정 — 명세: 조리기구 전력 종료 후 구역 체류 지속이 주 신호
+prep_to_eating_gap_sec = 180      # 조리 종료 후 이만큼 지나면 EATING 후보
+eating_min_dwell_sec = 300        # 최소 체류
+fridge_recent_window_sec = 900    # 냉장고 접근을 "최근"으로 볼 창
+session_timeout_sec = 7200        # FSM 강제 종료 (2시간)
+
+[activity.sleep]
+tv_idle_for_sleep_sec = 7200      # TV 무조작 2시간 — 수면 판단의 핵심 신호
+bed_confirm_sec = 600             # 압력 패드 점유 지속
+wake_confirm_sec = 300            # 이탈 후 이만큼 활동하면 기상 확정
+
+[activity.away]
+door_exit_quiet_sec = 600         # 현관 개폐 후 전 구역 무반응 지속 → AWAY
+no_motion_unknown_sec = 3600      # 현관 이벤트 없이 무반응 → UNKNOWN
+
+
+# ============================================================ 이상 판정
+#
+# KDE 분포와 대조해 개입 후보를 만드는 기준.
+
+[thresholds.meal]
+tail_max = 0.05
+# predictability_min 은 현재 baseline.py 의 **정규화 안 된** 스케일 기준이다.
+# 검증표상 std 75분이 넘어야 걸리는 값이라 사실상 전부 통과한다.
+# 명세는 predictability 를 0~1 로 정의하므로, D 트랙에서 정규화를 맞춘 뒤
+# 이 값을 다시 잡아야 한다. (그전까지 "불규칙한 사람은 개입 안 함"이 작동하지 않음)
+predictability_min = 0.05
+
+[thresholds.wake]
+tail_max = 0.05
+predictability_min = 0.05
+
+[thresholds.hydration]
+tail_max = 0.10                   # 수분은 느슨하게 — 놓치는 쪽이 더 나쁨
+predictability_min = 0.05
+
+
+# ============================================================ 알림 정책
+#
+# 명세의 notify_policy. 채널 선호·데드라인·쿨다운·comply 창.
+# 알림 층을 만들 때 채운다. 지금은 골격만.
+
+[notify.default]
+requires_ack = false              # 명세: 기본 false, 이벤트로 판정 불가할 때만 true
+ack_deadline_sec = 600
+cooldown_sec = 1800
+comply_window_min = 30
+
+[notify.WAKE_ROUTINE]
+affinity = ["smart_fridge", "smart_tv"]
+comply_window_min = 30
+
+[notify.MEDICATION_PROMPT]
+affinity = ["smart_fridge", "smart_tv"]
+requires_ack = true               # 복약은 이벤트로 판정 불가
+comply_window_min = 60
+
+[notify.SAFETY]
+affinity = ["smart_tv", "smart_light"]
+requires_ack = true
+ack_deadline_sec = 120
+cooldown_sec = 0                  # 안전은 쿨다운 없음
+
+
+# ============================================================ 총량 제한
+#
+# 명세: 각각은 규칙을 지켰는데 총량이 과한 상황을 막는다.
+
+[limits]
+max_per_day = 8
+min_interval_sec = 1800
+quiet_hours = { start = "22:00", end = "07:00" }   # 음성 채널 금지 시간대
+
+
+# ============================================================ 관측 창
+#
+# 개입 후 사용자 반응을 지켜보는 시간. 명세: 조명은 짧고 온도는 길다.
+
+[observe.default]
+window_sec = 600
+
+[observe.smart_light]
+window_sec = 180                  # 되돌림이 즉각적
+
+[observe.air_conditioner]
+window_sec = 1800                 # 체감에 시간이 걸림
+
+[observe.robot_cleaner]
+window_sec = 900
+
+
+# ============================================================ DEMO 프로파일
+#
+# 명세: DEMO 에서 쿨다운 단축, 타임아웃 축소, 관측 창 단축.
+# 아래 배수를 위 값들에 곱한다.
+
+[profile.DEMO]
+cooldown_scale = 0.1
+timeout_scale = 0.1
+observe_scale = 0.1

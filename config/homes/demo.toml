@@ -1,0 +1,258 @@
+# HESTIA demo 환경 — 센서/가전 배치
+#
+# 이 파일은 역할 매핑의 기본값(정본)이다.
+# 사용자가 대시보드에서 변경하면 hestia/registry/devices 가 이 위에 덮어쓴다.
+# RPi5 는 이 파일만으로 정상 부팅한다.
+#
+# source: 전 항목 mock — 센서 주문 중. 실물이 오면 해당 항목만 esp32 로 바꾼다.
+# node:   전 항목 esp32-1 — 노드 1개로 시작.
+#         LWT 가 노드 단위이므로 이 노드가 죽으면 전 구역 판단이 SENSOR_FAULT 가 된다.
+
+name = "demo"
+
+# 허용 값 목록. 여기 없는 값을 쓰면 로더가 기동을 거부한다 (오타 방지).
+areas = ["living", "kitchen", "bedroom", "bathroom", "utility", "entrance"]
+roles = ["LIVING", "SLEEP", "MEAL", "HYGIENE", "LAUNDRY", "ENTRY", "FOCUS"]
+# FOCUS 는 목록에만 둔다. 별도 작업 공간이 없어 지금은 어느 센서에도 붙이지 않는다.
+
+
+# ============================================================ 거실
+
+[[sensors]]
+id = "vs-01"
+type = "presence"
+area = "living"
+roles = ["LIVING"]
+source = "mock"
+node = "esp32-1"
+note = "소파·탁자 mmWave"
+
+[[sensors]]
+id = "vs-02"
+type = "bed"
+area = "living"
+roles = ["LIVING"]
+source = "mock"
+node = "esp32-1"
+note = "소파 압력 패드"
+
+# 한 모듈에 두 타입이면 virtual_id 를 분리한다.
+# 토픽이 같으면 retained 가 서로를 덮어쓴다.
+[[sensors]]
+id = "vs-03l"
+type = "light"
+area = "living"
+roles = ["LIVING"]
+source = "mock"
+node = "esp32-1"
+note = "조도"
+
+[[sensors]]
+id = "vs-03c"
+type = "climate"
+area = "living"
+roles = ["LIVING"]
+source = "mock"
+node = "esp32-1"
+note = "온습도"
+
+
+# ============================================================ 주방
+
+[[sensors]]
+id = "vs-04"
+type = "presence"
+area = "kitchen"
+roles = ["MEAL"]
+source = "mock"
+node = "esp32-1"
+note = "식탁 mmWave — EATING 판정의 체류 신호"
+
+[[sensors]]
+id = "vs-05"
+type = "motion"
+area = "kitchen"
+roles = ["MEAL"]
+source = "mock"
+node = "esp32-1"
+note = "주방 PIR"
+
+[[sensors]]
+id = "vs-06"
+type = "power"
+area = "kitchen"
+roles = ["MEAL"]
+source = "mock"
+node = "esp32-1"
+power_profile = "induction"
+note = "인덕션 — MEAL_PREP t0 의 주 신호"
+
+[[sensors]]
+id = "vs-07"
+type = "power"
+area = "kitchen"
+roles = ["MEAL"]
+source = "mock"
+node = "esp32-1"
+power_profile = "microwave"
+note = "전자레인지"
+
+
+# ============================================================ 방1
+
+[[sensors]]
+id = "vs-08"
+type = "presence"
+area = "bedroom"
+roles = ["SLEEP"]
+source = "mock"
+node = "esp32-1"
+note = "침대 mmWave — energy 로 수면/각성 구분"
+
+[[sensors]]
+id = "vs-09"
+type = "bed"
+area = "bedroom"
+roles = ["SLEEP"]
+source = "mock"
+node = "esp32-1"
+note = "침대 압력 패드 — wake_t0 의 주 신호"
+
+[[sensors]]
+id = "vs-10"
+type = "motion"
+area = "bedroom"
+roles = ["SLEEP"]
+source = "mock"
+node = "esp32-1"
+note = "방문 PIR"
+
+
+# ============================================================ 화장실
+
+[[sensors]]
+id = "vs-11"
+type = "presence"
+area = "bathroom"
+roles = ["HYGIENE"]
+source = "mock"
+node = "esp32-1"
+note = "mmWave — present=true 인데 energy 바닥이면 쓰러짐 후보"
+
+[[sensors]]
+id = "vs-12"
+type = "motion"
+area = "bathroom"
+roles = ["HYGIENE"]
+source = "mock"
+node = "esp32-1"
+note = "화장실문 PIR"
+
+
+# ============================================================ 다용도실
+
+[[sensors]]
+id = "vs-13"
+type = "motion"
+area = "utility"
+roles = ["LAUNDRY"]
+source = "mock"
+node = "esp32-1"
+note = "다용도실문 PIR — 세탁물 수거 확인"
+
+
+# ============================================================ 현관
+
+[[sensors]]
+id = "vs-14"
+type = "door"
+area = "entrance"
+roles = ["ENTRY"]
+source = "mock"
+node = "esp32-1"
+note = "현관문 — away 판정의 door_exit 근거"
+
+[[sensors]]
+id = "vs-15"
+type = "motion"
+area = "entrance"
+roles = ["ENTRY"]
+source = "mock"
+node = "esp32-1"
+note = "문 앞 PIR — 체류 시간"
+
+
+# ============================================================ 가전
+#
+# 가전은 판단의 입력이면서 개입의 출력이기도 하다.
+# WATCHING_TV / RESTING / FOCUSED 는 센서 신호가 동일하며
+# TV 전원과 remote_input 으로만 갈린다.
+
+[[devices]]
+id = "vd-01"
+device_type = "smart_tv"
+area = "living"
+source = "mock"
+channel = true
+note = "배너 채널. remote_input 은 수면 판단의 핵심 신호"
+
+[[devices]]
+id = "vd-02"
+device_type = "smart_light"
+area = "living"
+source = "mock"
+channel = true
+note = "비언어 신호 채널"
+
+[[devices]]
+id = "vd-03"
+device_type = "air_conditioner"
+area = "living"
+source = "mock"
+channel = false
+
+[[devices]]
+id = "vd-04"
+device_type = "robot_cleaner"
+area = "living"
+source = "mock"
+channel = false
+note = "시나리오 1 — 집중/수면 중 연기"
+
+[[devices]]
+id = "vd-05"
+device_type = "smart_fridge"
+area = "kitchen"
+source = "mock"
+channel = true
+note = "디스플레이 채널. door_opened 는 EATING 보조 신호"
+
+[[devices]]
+id = "vd-06"
+device_type = "water_purifier"
+area = "kitchen"
+source = "mock"
+channel = false
+note = "dispensed 는 시나리오 2·4 의 핵심 신호"
+
+[[devices]]
+id = "vd-07"
+device_type = "smart_light"
+area = "kitchen"
+source = "mock"
+channel = true
+
+[[devices]]
+id = "vd-08"
+device_type = "washer"
+area = "utility"
+source = "mock"
+channel = false
+note = "cycle_completed 후 vs-13 으로 수거 확인"
+
+[[devices]]
+id = "vd-09"
+device_type = "smart_light"
+area = "bedroom"
+source = "mock"
+channel = true
