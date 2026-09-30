@@ -20,20 +20,20 @@ def run(path=DATA):
 
 def test_all_lines_ingested():
     result, sink = run()
-    assert result.lines == 14
+    assert result.lines == 22
     assert sink.dropped == 0
-    assert len(sink.received) == 14
+    assert len(sink.received) == 22
 
 
 def test_comments_and_blanks_skipped():
     lines = list(read_jsonl(DATA))
-    assert len(lines) == 14          # 주석 2줄은 제외됨
+    assert len(lines) == 22
 
 
 def test_clock_follows_recv_ts():
     """마지막 줄 처리 시점의 시계가 그 줄의 ts 여야 한다."""
     _, sink = run()
-    assert sink.received[-1].recv_ts == 1790296800.0
+    assert sink.received[-1].recv_ts == 1790297100.0
 
 
 def test_recv_ts_differs_from_sent_ts():
@@ -45,7 +45,7 @@ def test_recv_ts_differs_from_sent_ts():
 
 def test_span_covers_seven_hours():
     result, _ = run()
-    assert result.span_sec == 1790296800 - 1790271000
+    assert result.span_sec == 1790297100 - 1790271000
 
 
 def test_order_preserved():
