@@ -65,3 +65,9 @@ apps/atlas/
 
 # ATLAS build packages
 apps/**/*.ipk
+
+# apps/.gitignore 안의 패턴은 apps/ 기준으로 해석된다.
+# 위의 apps/ 접두 패턴은 저장소 루트 기준이라 매칭되지 않으므로 같은 대상을 다시 적는다.
+/.metadata
+/atlas/
+*.ipk
