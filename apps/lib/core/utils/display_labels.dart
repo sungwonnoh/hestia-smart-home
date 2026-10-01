@@ -78,6 +78,19 @@ abstract final class ContextLabels {
   }
 }
 
+abstract final class RoomLabels {
+  static IconData icon(String roomId) => switch (roomId) {
+        'living' => Icons.weekend_rounded,
+        'bedroom' => Icons.bed_rounded,
+        'kitchen' => Icons.restaurant_rounded,
+        'bathroom' => Icons.bathtub_rounded,
+        'utility' => Icons.wash_rounded,
+        'entrance' => Icons.door_front_door_rounded,
+        'studio' => Icons.cottage_rounded,
+        _ => Icons.meeting_room_rounded,
+      };
+}
+
 abstract final class DeviceLabels {
   static IconData icon(DeviceType type) => switch (type) {
         DeviceType.tv => Icons.tv_rounded,
