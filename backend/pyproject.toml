@@ -1,0 +1,9 @@
+[project]
+name = "hestia-api"
+version = "0.1.0"
+description = "HESTIA FastAPI Backend Adapter (RPi5)"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
