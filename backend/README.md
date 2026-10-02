@@ -87,6 +87,21 @@ Flutter 가전(`tv-01`)과 MQTT 장치(`vd-01`)는 `virtualId` 로 연결한다.
 pytest                                  # 브로커 없이 Mock MQTT 메시지로 검증
 
 # Mosquitto 가 있을 때: API 실행 후 데모 시나리오 발행
-python scripts/mock_mqtt.py --interval 1
+python scripts/mock_mqtt.py                  # 가전 상태만 (기본, retain 안 함)
+python scripts/mock_mqtt.py --mode full      # + context·복약 알림 (Context Engine 흉내)
 curl localhost:8000/api/v1/context/current
+```
+
+`mock_mqtt.py` 는 실제 Context Engine 과 같은 브로커에서 써도 안전한 쪽이 기본이다.
+
+- `hestia/registry/devices` 는 엔진의 역할 매핑을 덮어쓰므로 발행하지 않는다.
+- `--mode full` 은 엔진 출력과 섞이므로 `hestia-engine` 을 멈추고 쓴다. src_id 는 `mock-engine`.
+- 기본은 retain 하지 않는다. `--retain` 으로 남긴 메시지는 같은 `--mode` 에 `--clear` 를 붙여 지운다.
+
+RPi5 (Docker, `--network host`):
+
+```bash
+docker exec hestia-api python scripts/mock_mqtt.py
+docker stop hestia-engine && docker exec hestia-api python scripts/mock_mqtt.py --mode full
+docker start hestia-engine
 ```
