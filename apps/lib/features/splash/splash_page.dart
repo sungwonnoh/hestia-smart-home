@@ -29,22 +29,27 @@ class _SplashPageState extends State<SplashPage> {
   }
 
   Future<void> _boot() async {
-    if (_error != null) setState(() => _error = null);
-    final repository = HestiaScope.of(context).repository;
-    final navigator = Navigator.of(context);
-    try {
-      final results = await Future.wait([
-        repository.getSetup(),
-        Future<void>.delayed(widget.minDuration),
-      ]);
-      if (!mounted) return;
-      navigator.pushReplacementNamed(
-        results[0] == null ? AppRoutes.onboarding : AppRoutes.shell,
-      );
-    } on HestiaException catch (e) {
-      if (mounted) setState(() => _error = e.message);
-    }
+  if (_error != null) setState(() => _error = null);
+
+  final repository = HestiaScope.of(context).repository;
+  final navigator = Navigator.of(context);
+
+  try {
+    final setupFuture = repository.getSetup();
+    final delayFuture = Future<void>.delayed(widget.minDuration);
+
+    final setup = await setupFuture;
+    await delayFuture;
+
+    if (!mounted) return;
+
+    navigator.pushReplacementNamed(
+      setup == null ? AppRoutes.onboarding : AppRoutes.shell,
+    );
+  } on HestiaException catch (e) {
+    if (mounted) setState(() => _error = e.message);
   }
+}
 
   @override
   Widget build(BuildContext context) {
