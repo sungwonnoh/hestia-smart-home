@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.db
+
+.pytest_cache/
+.venv/
+venv/
+
+tests/
+requirements-dev.txt
+
+.git/
+.gitignore
+
+.DS_Store
+.env
