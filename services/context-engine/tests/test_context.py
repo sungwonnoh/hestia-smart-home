@@ -511,7 +511,7 @@ def test_timer_change_reaches_callback(tmp_path):
 def test_recompute_returns_only_changed(c):
     changed = c.presence("vs-03", True)
     names = {ctx.name for ctx in changed}
-    assert names == {"presence", "away", "occupancy"}    # 첫 계산은 전부
+    assert names == {"presence", "away", "occupancy", "activity"}
 
 
 def test_second_recompute_is_empty(c):
@@ -530,7 +530,7 @@ def test_energy_jitter_does_not_republish(c):
 
 def test_all_contexts_for_periodic_publish(c):
     c.presence("vs-03", True)
-    assert len(c.engine.all_contexts()) == 3
+    assert len(c.engine.all_contexts()) == 4
 
 
 def test_payload_shape(c):

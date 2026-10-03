@@ -120,8 +120,16 @@ single_restore_sec = 300          # MULTI 해제 후 SINGLE 복귀까지
 
 # ============================================================ activity 판정
 #
-# 15종 상태의 점수 계산 파라미터.
-# 실제 가중치는 2단계에서 규칙을 만들며 채운다. 지금은 공통 항목만.
+# 12종 상태에 각각 점수를 매기고 가장 높은 것을 고른다.
+# if-else 사슬을 쓰지 않는 이유: 조건 순서가 결과를 바꾸고,
+# 상태를 하나 추가할 때마다 전체를 다시 봐야 한다.
+#
+# 가중치 합을 1.0 으로 맞추지 않는다. 하나를 바꿀 때 나머지를 다 조정해야 하고,
+# Replay 스윕에서 축이 하나가 아니라 여럿이 된다.
+# confidence 는 전체 합 대비 비율로 구한다.
+#
+# **값은 전부 임시값이다.** 근거가 강한 순서만 뜻이 있다.
+# 벤치 측정과 Replay 스윕으로 확정한다.
 
 [activity]
 min_score = 0.35                  # 이 미만이면 UNKNOWN (open-set)
@@ -129,7 +137,6 @@ hysteresis_bonus = 0.10           # 현재 상태 유지에 주는 가산점
 min_hold_sec = 60                 # 상태 최소 지속
 
 [activity.meal]
-# EATING 판정 — 명세: 조리기구 전력 종료 후 구역 체류 지속이 주 신호
 prep_to_eating_gap_sec = 180      # 조리 종료 후 이만큼 지나면 EATING 후보
 eating_min_dwell_sec = 300        # 최소 체류
 fridge_recent_window_sec = 900    # 냉장고 접근을 "최근"으로 볼 창
@@ -138,7 +145,61 @@ session_timeout_sec = 7200        # FSM 강제 종료 (2시간)
 [activity.sleep]
 tv_idle_for_sleep_sec = 7200      # TV 무조작 2시간 — 수면 판단의 핵심 신호
 bed_confirm_sec = 600             # 압력 패드 점유 지속
+still_for_sleep_sec = 600         # energy 바닥이 이만큼 지속돼야 SLEEPING
 wake_confirm_sec = 300            # 이탈 후 이만큼 활동하면 기상 확정
+night_start_hour = 21             # 야간으로 보는 시간대
+night_end_hour = 7
+
+# 상태별 근거 가중치. 합산해 점수를 만든다.
+# IN_BED_AWAKE 를 기본으로 두고 확신이 쌓일 때 SLEEPING 으로 간다 —
+# 깨어 있는 사람의 조명을 끄는 쪽이 실수 비용이 크다.
+
+[activity.weights.SLEEPING]
+bed_occupied = 0.35
+still_sustained = 0.30
+tv_idle = 0.15
+night_hours = 0.20
+
+[activity.weights.IN_BED_AWAKE]
+bed_occupied = 0.40
+moving = 0.25
+not_night = 0.15
+
+[activity.weights.WAKING]
+bed_left_recent = 0.45
+bedroom_motion = 0.20
+morning_hours = 0.15
+
+[activity.weights.MEAL_PREP]
+cooking_on = 0.60
+kitchen_present = 0.25
+fridge_recent = 0.10
+
+[activity.weights.EATING]
+cooking_off_recent = 0.35
+kitchen_dwell = 0.30
+low_energy = 0.15
+fridge_recent = 0.10
+
+[activity.weights.KITCHEN_MISC]
+kitchen_present = 0.40
+
+[activity.weights.BATHROOM]
+bathroom_present = 0.85
+
+[activity.weights.WATCHING_TV]
+tv_on = 0.45
+living_present = 0.25
+remote_recent = 0.15
+
+[activity.weights.RESTING]
+living_present = 0.30
+bed_occupied = 0.25
+tv_off = 0.15
+
+[activity.weights.LAUNDRY]
+washer_running = 0.50
+utility_motion = 0.25
 
 
 # ============================================================ 이상 판정

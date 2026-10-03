@@ -603,16 +603,20 @@ class ContextEngine:
         scheduler: Scheduler,
         on_change: Callable[[tuple[Context, ...]], None] | None = None,
     ) -> None:
+        from .activity import ActivityContext, ActivityEvaluator   # 순환 import 회피
+
         self._clock = clock
         self._sched = scheduler
         self._on_change = on_change
         self._presence_eval = PresenceEvaluator(clock, config, world)
         self._away_eval = AwayEvaluator(clock, config, world)
         self._occupancy_eval = OccupancyEvaluator(clock, config, world)
+        self._activity_eval = ActivityEvaluator(clock, config, world)
 
         self.presence: PresenceContext | None = None
         self.away: AwayContext | None = None
         self.occupancy: OccupancyContext | None = None
+        self.activity: ActivityContext | None = None
 
     def recompute(self) -> tuple[Context, ...]:
         """전부 다시 계산하고, 직전과 다른 것만 돌려준다."""
@@ -637,6 +641,13 @@ class ContextEngine:
             changed.append(occupancy)
         self.occupancy = occupancy
 
+        # activity 는 presence 와 away 를 읽는다. 순서상 마지막.
+        activity, t = self._activity_eval.evaluate(presence, away, self.activity)
+        timers += t
+        if not activity.same_as(self.activity):
+            changed.append(activity)
+        self.activity = activity
+
         for key, at in timers:
             self._arm(key, at)
 
@@ -644,7 +655,10 @@ class ContextEngine:
 
     def all_contexts(self) -> tuple[Context, ...]:
         """5분 주기 생존 발행용 — 바뀌지 않아도 전부."""
-        return tuple(c for c in (self.presence, self.away, self.occupancy) if c is not None)
+        return tuple(
+            c for c in (self.presence, self.away, self.occupancy, self.activity)
+            if c is not None
+        )
 
     # ------------------------------------------------------------ 타이머
 
