@@ -576,17 +576,175 @@ class OccupancyEvaluator:
         )
 
 
+# ==================================================================== suppression
+
+
+SUPPRESSION_REASONS = ("SLEEP_PROBE", "AWAY", "MULTI", "COOLDOWN")
+
+
+@dataclass(frozen=True, slots=True)
+class SuppressionContext(Context):
+    """지금 알림을 보내면 안 되는 상태인가.
+
+    다른 context 와 성격이 다르다 — 센서를 읽어 세상을 추론하는 것이 아니라
+    엔진 자기 상태다. 그래서 confidence·factors 를 쓰지 않는다 (명세).
+
+    발행은 대시보드 가시성과 재시작 복원용이고, 실제 억제는
+    알림 코드가 메모리에서 allows() 로 확인한다.
+    """
+
+    active: bool = False
+    reason: str | None = None
+    stage: int | None = None           # SLEEP_PROBE 일 때만
+    until: float | None = None         # 시한부 억제만. 조건부는 None
+    except_: tuple[str, ...] = ()
+
+    def payload(self, now: float) -> dict[str, Any]:
+        return {
+            "active": self.active,
+            "reason": self.reason,
+            "stage": self.stage,
+            "until": self.until,
+            "except": list(self.except_),
+        }
+
+    def same_as(self, other: Context | None) -> bool:
+        if not isinstance(other, SuppressionContext):
+            return False
+        return (
+            self.active == other.active
+            and self.reason == other.reason
+            and self.stage == other.stage
+        )
+
+    def allows(self, scenario: str) -> bool:
+        """이 시나리오의 알림을 지금 보내도 되는가.
+
+        명세: 안전 시나리오는 어떤 억제도 뚫는다 — 외출 중이어도,
+        프로브 중이어도, 다인 상황이어도 안전 알림은 발송.
+        """
+        return (not self.active) or scenario in self.except_
+
+
+class SuppressionEvaluator:
+    """억제 사유 넷을 판정한다.
+
+    AWAY / MULTI 는 조건부 — 상태가 바뀌어야 풀린다 (until 없음).
+    COOLDOWN / SLEEP_PROBE 는 시한부 — until 이 있고 타이머가 필요하다.
+
+    SLEEP_PROBE 는 자리만 둔다. 프로브는 시나리오 로직이고,
+    그 단계는 presence.user_area 로 갈린다 —
+    침대면 조명·볼륨, 소파면 TV 배너. 명세의 선형 4단계는 부정확하다.
+    """
+
+    def __init__(self, clock: Clock, config: Config) -> None:
+        self._clock = clock
+        self._config = config
+        self._cooldown_until: float | None = None
+        self._probe_stage: int | None = None
+        self._probe_until: float | None = None
+
+    def evaluate(
+        self,
+        away: AwayContext,
+        occupancy: OccupancyContext,
+        prev: SuppressionContext | None,
+    ) -> tuple[SuppressionContext, list[tuple[str, float]]]:
+        now = self._clock.now()
+        timers: list[tuple[str, float]] = []
+        base = tuple(
+            self._config.value("suppression", "always_except", default=["SAFETY"])
+        )
+
+        # 우선순위 — 더 강한 억제가 이긴다
+        if self._probe_until is not None and now < self._probe_until:
+            timers.append(("suppression-probe", self._probe_until))
+            return self._build(
+                "SLEEP_PROBE", self._probe_stage, self._probe_until,
+                (*base, "SLEEP_ROUTINE"), prev, now,
+            ), timers
+
+        if away.state == "AWAY":
+            # 집 안 채널로 보내도 무의미하다
+            return self._build("AWAY", None, None, base, prev, now), timers
+
+        if occupancy.state == "MULTI":
+            # 명세: 개인 Baseline 학습 중단, 개인화 알림 중단
+            return self._build("MULTI", None, None, base, prev, now), timers
+
+        if self._cooldown_until is not None:
+            if now < self._cooldown_until:
+                timers.append(("suppression-cooldown", self._cooldown_until))
+                return self._build(
+                    "COOLDOWN", None, self._cooldown_until, base, prev, now
+                ), timers
+            self._cooldown_until = None
+
+        return self._build(None, None, None, base, prev, now), timers
+
+    # ------------------------------------------------------------ 알림 층이 부른다
+
+    def note_notification(self, at: float | None = None) -> None:
+        """알림을 발행했다. 쿨다운을 건다.
+
+        알림 층이 생기면 notify/push 직후 호출한다.
+        """
+        now = at if at is not None else self._clock.now()
+        self._cooldown_until = now + float(
+            self._config.value("suppression", "cooldown_sec", default=1800)
+        )
+
+    def start_probe(self, stage: int, duration_sec: float) -> None:
+        """수면 프로브 시작. 반응 관측이 오염되지 않도록 다른 알림을 막는다."""
+        self._probe_stage = stage
+        self._probe_until = self._clock.now() + duration_sec
+
+    def end_probe(self) -> None:
+        self._probe_stage = None
+        self._probe_until = None
+
+    def clear_cooldown(self) -> None:
+        self._cooldown_until = None
+
+    # ------------------------------------------------------------ 내부
+
+    def _build(
+        self,
+        reason: str | None,
+        stage: int | None,
+        until: float | None,
+        base_except: tuple[str, ...],
+        prev: SuppressionContext | None,
+        now: float,
+    ) -> SuppressionContext:
+        active = reason is not None
+        since = (
+            prev.since
+            if prev is not None and prev.active == active and prev.reason == reason
+            else now
+        )
+        return SuppressionContext(
+            name="suppression",
+            since=since,
+            active=active,
+            reason=reason,
+            stage=stage,
+            until=until,
+            except_=base_except if active else (),
+        )
+    
+
 # ==================================================================== 엮기
 
 
 class ContextEngine:
-    """세 context 를 계산하고 바뀐 것만 돌려준다.
+    """다섯 context 를 계산하고 바뀐 것만 돌려준다.
 
     recompute() 는 순수하다 — 계산과 타이머 예약만 하고 발행하지 않는다.
     그래서 몇 번 불려도 안전하고, 두 번째 호출은 빈 튜플을 돌려준다.
 
-    의존 순서: presence → away → occupancy
-    away 가 presence 를 읽고, occupancy 가 둘 다 읽는다.
+    의존 순서: presence → away → occupancy → activity → suppression
+    뒤쪽이 앞쪽 결과를 인자로 받는다.
 
     경로가 둘이다.
       메시지 → 호출부가 recompute() 를 부르고 반환값을 받는다
@@ -614,6 +772,7 @@ class ContextEngine:
         self._away_eval = AwayEvaluator(clock, config, world)
         self._occupancy_eval = OccupancyEvaluator(clock, config, world)
         self._activity_eval = ActivityEvaluator(clock, config, world)
+        self._suppression_eval = SuppressionEvaluator(clock, config)
 
         self.meal_fsm = MealFSM(clock, config, world, t0log)
         self.wake_fsm = WakeFSM(clock, config, world, t0log)
@@ -622,6 +781,7 @@ class ContextEngine:
         self.away: AwayContext | None = None
         self.occupancy: OccupancyContext | None = None
         self.activity: ActivityContext | None = None
+        self.suppression: SuppressionContext | None = None
 
 
     def recompute(self) -> tuple[Context, ...]:
@@ -667,6 +827,13 @@ class ContextEngine:
             changed.append(activity)
         self.activity = activity
 
+        # 억제는 away 와 occupancy 를 읽는다. 순서상 마지막.
+        suppression, t = self._suppression_eval.evaluate(away, occupancy, self.suppression)
+        timers += t
+        if not suppression.same_as(self.suppression):
+            changed.append(suppression)
+        self.suppression = suppression
+
         for key, at in timers:
             self._arm(key, at)
 
@@ -675,7 +842,10 @@ class ContextEngine:
     def all_contexts(self) -> tuple[Context, ...]:
         """5분 주기 생존 발행용 — 바뀌지 않아도 전부."""
         return tuple(
-            c for c in (self.presence, self.away, self.occupancy, self.activity)
+            c for c in (
+                self.presence, self.away, self.occupancy,
+                self.activity, self.suppression,
+            )
             if c is not None
         )
 
@@ -689,6 +859,19 @@ class ContextEngine:
 
         if isinstance(msg, m.DispensedEvent):
             self.wake_fsm.note_hydration()
+
+    def allows(self, scenario: str) -> bool:
+        """이 시나리오의 알림을 지금 보내도 되는가.
+
+        억제 중이 아니거나, 그 시나리오가 except 에 있으면 허용.
+        """
+        if self.suppression is None:
+            return True
+        return self.suppression.allows(scenario)
+
+    def note_notification(self) -> None:
+        """알림을 발행했다. 쿨다운을 건다. 알림 층이 호출한다."""
+        self._suppression_eval.note_notification()
 
     # ------------------------------------------------------------ 타이머
 

@@ -511,7 +511,7 @@ def test_timer_change_reaches_callback(tmp_path):
 def test_recompute_returns_only_changed(c):
     changed = c.presence("vs-03", True)
     names = {ctx.name for ctx in changed}
-    assert names == {"presence", "away", "occupancy", "activity"}
+    assert names == {"presence", "away", "occupancy", "activity", "suppression"}
 
 
 def test_second_recompute_is_empty(c):
@@ -530,7 +530,7 @@ def test_energy_jitter_does_not_republish(c):
 
 def test_all_contexts_for_periodic_publish(c):
     c.presence("vs-03", True)
-    assert len(c.engine.all_contexts()) == 4
+    assert len(c.engine.all_contexts()) == 5
 
 
 def test_payload_shape(c):
@@ -583,3 +583,130 @@ def test_morning_scenario_tracks_user():
     assert engine.presence.user_area == "kitchen"
     assert engine.away.state == "HOME"
     assert engine.occupancy.state == "SINGLE"
+
+
+# ============================================================ suppression
+
+
+def test_no_suppression_by_default(c):
+    c.presence("vs-03", True)
+    assert c.engine.suppression.active is False
+    assert c.engine.suppression.reason is None
+    assert c.engine.allows("WAKE_ROUTINE") is True
+
+
+def test_away_suppresses(c):
+    """외출 중에는 집 안 채널로 보내도 무의미하다."""
+    c.presence("vs-03", True)
+    c.at(T0 + 100).presence("vs-03", False)
+    c.at(T0 + 110).door("vs-06", True)
+    c.at(T0 + 115).door("vs-06", False)
+    c.at(T0 + 800).engine.recompute()
+
+    assert c.a.state == "AWAY"
+    assert c.engine.suppression.reason == "AWAY"
+    assert c.engine.allows("WAKE_ROUTINE") is False
+
+
+def test_safety_pierces_any_suppression(c):
+    """명세: 안전 시나리오는 어떤 억제도 뚫는다."""
+    c.presence("vs-03", True)
+    c.at(T0 + 100).presence("vs-03", False)
+    c.at(T0 + 110).door("vs-06", True)
+    c.at(T0 + 115).door("vs-06", False)
+    c.at(T0 + 800).engine.recompute()
+
+    assert c.engine.suppression.active is True
+    assert c.engine.allows("SAFETY") is True
+
+
+def test_multi_suppresses(c):
+    """MULTI 판정 시 개인화 알림 중단."""
+    c.presence("vs-03", True)
+    c.presence("vs-01", True)
+    c.at(T0 + 121).engine.recompute()
+
+    assert c.o.state == "MULTI"
+    assert c.engine.suppression.reason == "MULTI"
+    assert c.engine.allows("MEDICATION_PROMPT") is False
+    assert c.engine.allows("SAFETY") is True
+
+
+def test_cooldown_after_notification(c):
+    c.presence("vs-03", True)
+    assert c.engine.allows("WAKE_ROUTINE") is True
+
+    c.engine.note_notification()
+    c.at(T0 + 60).engine.recompute()
+    assert c.engine.suppression.reason == "COOLDOWN"
+    assert c.engine.allows("WAKE_ROUTINE") is False
+
+
+def test_cooldown_expires(c):
+    c.presence("vs-03", True)
+    c.engine.note_notification()
+    c.at(T0 + 60).engine.recompute()
+    assert c.engine.suppression.active is True
+
+    c.at(T0 + 1900).engine.recompute()             # cooldown_sec 1800 경과
+    assert c.engine.suppression.active is False
+
+
+def test_cooldown_has_until(c):
+    """시한부 억제는 until 이 있다. AWAY/MULTI 는 조건부라 None."""
+    c.presence("vs-03", True)
+    c.engine.note_notification()
+    c.at(T0 + 60).engine.recompute()
+    assert c.engine.suppression.until == T0 + 1800
+
+
+def test_away_outranks_cooldown(c):
+    """우선순위 — 더 강한 억제가 이긴다."""
+    c.presence("vs-03", True)
+    c.engine.note_notification()
+    c.at(T0 + 100).presence("vs-03", False)
+    c.at(T0 + 115).door("vs-06", False)
+    c.at(T0 + 800).engine.recompute()
+    assert c.engine.suppression.reason == "AWAY"
+
+
+def test_probe_outranks_all(c):
+    c.presence("vs-03", True)
+    c.engine._suppression_eval.start_probe(stage=2, duration_sec=300)
+    c.at(T0 + 60).engine.recompute()
+
+    s = c.engine.suppression
+    assert s.reason == "SLEEP_PROBE"
+    assert s.stage == 2
+    assert "SLEEP_ROUTINE" in s.except_          # 프로브 자신은 예외
+    assert c.engine.allows("SLEEP_ROUTINE") is True
+    assert c.engine.allows("WAKE_ROUTINE") is False
+
+
+def test_probe_ends(c):
+    c.presence("vs-03", True)
+    c.engine._suppression_eval.start_probe(stage=1, duration_sec=300)
+    c.at(T0 + 60).engine.recompute()
+    assert c.engine.suppression.active is True
+
+    c.engine._suppression_eval.end_probe()
+    c.at(T0 + 120).engine.recompute()
+    assert c.engine.suppression.active is False
+
+
+def test_suppression_payload_shape(c):
+    c.presence("vs-03", True)
+    p = c.engine.suppression.payload(c.clock.now())
+    assert set(p) == {"active", "reason", "stage", "until", "except"}
+
+
+def test_suppression_timer_releases_cooldown(c):
+    """시한부 억제는 타이머로 풀린다 — 메시지가 없어도."""
+    c.presence("vs-03", True)
+    c.engine.note_notification()
+    c.at(T0 + 60).engine.recompute()
+    assert c.engine.suppression.active is True
+
+    c.clock.advance_to(T0 + 1900)
+    c.sched.run_due()
+    assert c.engine.suppression.active is False
