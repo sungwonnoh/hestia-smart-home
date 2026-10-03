@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 
 import 'app/app.dart';
+import 'core/constants/app_config.dart';
+import 'repositories/api_hestia_repository.dart';
+import 'repositories/hestia_repository.dart';
 import 'repositories/mock_hestia_repository.dart';
 
 void main() {
-  // Phase 1: 서버 없이 Mock 데이터로 실행한다.
-  runApp(HestiaApp(repository: MockHestiaRepository()));
+  // Repository만 바꾼다. 화면 코드는 데이터 출처를 모른다.
+  final HestiaRepository repository = AppConfig.useApi
+      ? ApiHestiaRepository.fromConfig()
+      : MockHestiaRepository();
+  runApp(HestiaApp(repository: repository));
 }
