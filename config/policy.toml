@@ -58,12 +58,64 @@ area_switch_min_sec = 20          # 구역 전환 최소 지속 (오가는 떨�
 still_max = 10                    # 이 이하면 정지
 active_min = 30                   # 이 이상이면 활동 중
 
+# 근거별 확신도.
+#
+# **아래 값은 전부 임시값이다.** 순서(mmWave > 압력패드 > PIR)만 센서 원리에서
+# 나온 것이고 — mmWave 는 정지한 사람도 감지하고 PIR 은 놓친다 —
+# 절대값은 근거가 없다.
+# B-9~B-13 벤치 측정(센서별 오탐·미탐률) 후 재설정하고,
+# Replay 스윕(H-5)으로 조합을 튜닝한다.
+#
+# method: 근거가 여럿일 때 합치는 방식.
+#   max      — 가장 강한 근거 하나를 쓴다 (현재)
+#   noisy_or — 1 - Π(1-p). 근거가 쌓이면 올라간다.
+#              센서별 오탐률(p)을 측정한 뒤에야 의미가 있다.
+[presence.confidence]
+method = "max"
+mmwave_active = 0.95              # present + energy >= active_min
+mmwave_still = 0.85               # present + energy < active_min
+bed = 0.80                        # 압력 패드 점유
+pir_recent = 0.60                 # PIR motion, timeout 이내
+pir_stale = 0.35                  # PIR 반응이 오래됨
+runner_up_penalty = 0.5           # user_area 선택 시 2등과의 격차 반영 계수
+
 # 화장실 쓰러짐 후보 — present=true 인데 energy 가 계속 바닥
 [presence.fall_watch]
 enabled = true
 areas = ["bathroom"]
 still_duration_sec = 600          # 10분간 정지 상태 지속
 escalate_after_sec = 1800         # 30분이면 SAFETY 시나리오
+
+
+# ============================================================ 부재 판정
+#
+# 명세의 context/away. HOME / AWAY / UNKNOWN / SENSOR_FAULT.
+#
+# AWAY 와 UNKNOWN 을 나누는 것은 '현관 이벤트가 있었나'다.
+# 문이 열렸다 닫히고 전 구역이 조용하면 나간 것이고,
+# 문은 안 열렸는데 조용하면 자고 있을 수도 쓰러졌을 수도 있다.
+# 성급히 AWAY 로 가면 안전 시나리오가 전부 억제된다.
+
+[away]
+door_exit_quiet_sec = 600         # 현관 개폐 후 전 구역 무반응 지속 → AWAY
+door_exit_window_sec = 1800       # 이 안에 현관 이벤트가 있었어야 door_exit 근거
+no_motion_unknown_sec = 3600      # 현관 이벤트 없이 무반응 → UNKNOWN
+
+
+# ============================================================ 인원 판정
+#
+# 명세는 근거를 셋 들지만 현재 배치로 쓸 수 있는 것은 하나뿐이다.
+#   두 구역 동시 재실     ✅
+#   mmWave targets 다중   ❌ 페이로드에 필드 없음 (LD2450 필요)
+#   도어벨 ring 이후 증가  ❌ 도어벨 미배치
+#
+# MULTI 판정의 대가가 크다 — 개인 Baseline 학습 중단, 개인화 알림 중단.
+# 오탐이 나면 프로젝트의 차별점이 조용히 꺼진다. 보수적으로 간다.
+
+[occupancy]
+multi_min_sec = 120               # 두 구역 동시 재실이 이만큼 지속돼야 MULTI
+multi_min_confidence = 0.80       # 두 구역 모두 이 이상의 확신도여야 함
+single_restore_sec = 300          # MULTI 해제 후 SINGLE 복귀까지
 
 
 # ============================================================ activity 판정
@@ -87,10 +139,6 @@ session_timeout_sec = 7200        # FSM 강제 종료 (2시간)
 tv_idle_for_sleep_sec = 7200      # TV 무조작 2시간 — 수면 판단의 핵심 신호
 bed_confirm_sec = 600             # 압력 패드 점유 지속
 wake_confirm_sec = 300            # 이탈 후 이만큼 활동하면 기상 확정
-
-[activity.away]
-door_exit_quiet_sec = 600         # 현관 개폐 후 전 구역 무반응 지속 → AWAY
-no_motion_unknown_sec = 3600      # 현관 이벤트 없이 무반응 → UNKNOWN
 
 
 # ============================================================ 이상 판정
