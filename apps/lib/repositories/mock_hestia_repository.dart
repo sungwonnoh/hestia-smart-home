@@ -111,10 +111,14 @@ class MockHestiaRepository implements HestiaRepository, DemoControls {
           confidence: 0.87,
           factors: const {'area': 'kitchen', 'presence': true},
         ),
+        // 실제 API와 같이 presence는 state 없이 area를 보낸다.
         ContextName.presence: const ContextState(
           name: ContextName.presence,
-          state: 'PRESENT',
-          factors: {'area': 'living'},
+          confidence: 0.9,
+          attributes: {
+            'area': 'living',
+            'areas': {'living': true, 'kitchen': false},
+          },
         ),
         ContextName.wake: const ContextState(
           name: ContextName.wake,

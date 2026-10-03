@@ -246,12 +246,11 @@ class _PrimaryState extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Icon(ContextLabels.icon(state.name, state.state),
-              size: 36, color: color),
+          Icon(ContextLabels.iconOf(state), size: 36, color: color),
           const SizedBox(width: 16),
           Expanded(
             child: Text(
-              ContextLabels.state(state.state),
+              ContextLabels.describe(state),
               style: theme.textTheme.headlineSmall?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
@@ -285,11 +284,11 @@ class _ContextChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(ContextLabels.icon(state.name, state.state), size: 20),
+          Icon(ContextLabels.iconOf(state), size: 20),
           const SizedBox(width: 6),
           Text(
             '${ContextLabels.name(state.name)} · '
-            '${ContextLabels.state(state.state)}',
+            '${ContextLabels.describe(state)}',
             style: const TextStyle(fontSize: 16),
           ),
         ],
