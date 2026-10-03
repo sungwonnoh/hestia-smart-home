@@ -14,3 +14,12 @@ class HestiaOfflineException extends HestiaException {
     super.message = 'HESTIA 서버와 연결할 수 없습니다.',
   ]);
 }
+
+/// 서버가 2xx가 아닌 응답을 줌. 404는 "없음"으로 처리할 수 있게 상태 코드를 둔다.
+class HestiaHttpException extends HestiaException {
+  const HestiaHttpException(this.statusCode, super.message);
+
+  final int statusCode;
+
+  bool get isNotFound => statusCode == 404;
+}

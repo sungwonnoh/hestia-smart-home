@@ -73,7 +73,7 @@ class Explanation {
       factors: factors,
       action: json['action'] as String?,
       createdAt: json['createdAt'] is String
-          ? DateTime.tryParse(json['createdAt'] as String)
+          ? DateTime.tryParse(json['createdAt'] as String)?.toLocal()
           : null,
     );
   }
