@@ -340,11 +340,12 @@ class WakeFSM:
 
         self._sleep_since = None
 
-        # 기상 — 침대를 떠나 명확한 활동이 보이면 확정
-        if self.state.state == "ASLEEP":
+        # 기상 — 침대를 떠나 명확한 활동이 보이면 확정.
+        # 단 야간은 제외한다. 새벽 화장실이 기상으로 잡히면
+        # wake_t0 가 새벽으로 찍히고 KDE 기상 분포가 통째로 오염된다.
+        if self.state.state == "ASLEEP" and self._is_wake_hour():
             if activity_state in ("BATHROOM", "MEAL_PREP", "EATING", "KITCHEN_MISC",
                                   "WATCHING_TV", "RESTING", "LAUNDRY"):
-                # 다른 방에서 활동 중 — 기상이 명백하다
                 self._confirm_wake(self._bed_left_at() or activity_since)
             elif activity_state == "WAKING":
                 if now - activity_since >= wake_need:
@@ -377,6 +378,21 @@ class WakeFSM:
         self.state = _replace(self.state, medication_done=True, medication_prompted=prompted)
 
     # ------------------------------------------------------------ 내부
+
+    def _is_wake_hour(self) -> bool:
+        """기상으로 인정하는 시간대.
+
+        명세에 없지만 필요하다 — 새벽 화장실과 아침 기상은
+        센서 신호가 같고 시각으로만 갈린다.
+        """
+        from datetime import datetime
+
+        from .timeutil import KST
+
+        hour = datetime.fromtimestamp(self._clock.now(), KST).hour
+        start = int(self._config.value("fsm", "wake", "earliest_hour", default=4))
+        end = int(self._config.value("fsm", "wake", "latest_hour", default=12))
+        return start <= hour < end
 
     def _bed_left_at(self) -> float | None:
         """침대 압력 패드가 해제된 시각.

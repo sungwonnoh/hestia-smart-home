@@ -353,24 +353,30 @@ def test_meal_flag(c):
     assert c.wake.meal_done is True
 
 
-def test_reset_on_next_sleep(night):
+def test_reset_on_next_sleep(c):
     """리셋은 다음 수면에서. activity 는 '지금'이고 wake 는 '오늘 하루'다."""
-    night.bed("vs-09", True)
-    night.at(NIGHT + 100).bed("vs-09", False)
-    night.at(NIGHT + 110).presence("vs-11", True)
-    night.at(NIGHT + 200).tick()
-    assert night.wake.state == "AWAKE"
+    # 아침에 기상
+    c.bed("vs-09", True)
+    c.at(MORNING + 100).bed("vs-09", False)
+    c.at(MORNING + 110).presence("vs-11", True)
+    c.at(MORNING + 200).tick()
+    assert c.wake.state == "AWAKE"
 
-    night.at(NIGHT + 300).presence("vs-11", False)
-    night.at(NIGHT + 400).bed("vs-09", True)
-    night.at(NIGHT + 410).presence("vs-08", True, energy=5)
+    c.at(MORNING + 300).dispensed()
+    assert c.wake.hydration_done is True
 
-    night.at(NIGHT + 1100).tick()                   # still 600 경과 → SLEEPING
-    assert night.engine.activity.state == "SLEEPING"
+    # 밤에 취침 — MORNING 09:40 에서 23:00 까지
+    night_at = MORNING + 48000                      # 약 23:00
+    c.at(night_at).presence("vs-11", False)
+    c.at(night_at + 100).bed("vs-09", True)
+    c.at(night_at + 110).presence("vs-08", True, energy=5)
 
-    night.at(NIGHT + 1800).tick()                   # sleep_confirm 600 경과
-    assert night.wake.state == "ASLEEP"
-    assert night.wake.hydration_done is False
+    c.at(night_at + 800).tick()                     # still 600 경과 → SLEEPING
+    assert c.engine.activity.state == "SLEEPING"
+
+    c.at(night_at + 1500).tick()                    # sleep_confirm 600 경과
+    assert c.wake.state == "ASLEEP"
+    assert c.wake.hydration_done is False           # 리셋됨
 
 
 def test_wake_payload_shape(c):
