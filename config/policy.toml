@@ -308,3 +308,12 @@ window_sec = 900
 cooldown_scale = 0.1
 timeout_scale = 0.1
 observe_scale = 0.1
+
+
+# ============================================================ 발행
+#
+# 명세: 상태 변화 시 즉시 + 5분 주기(생존 확인)
+# 주기 발행은 DEMO 배수를 적용하지 않는다.
+
+[publish]
+interval_sec = 300

@@ -374,7 +374,7 @@ def test_reset_on_next_sleep(night):
 
 
 def test_wake_payload_shape(c):
-    p = c.engine.wake_fsm.state.payload()
+    p = c.engine.wake_fsm.state.payload(c.clock.now())
     assert set(p) == {
         "state", "wake_t0",
         "hydration_done", "hydration_prompted",

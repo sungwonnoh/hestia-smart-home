@@ -25,6 +25,7 @@ from .clock import Clock
 from .config import Config
 from .timeutil import day_key
 from .world import PowerState, WorldState
+from .context import Context
 
 log = logging.getLogger(__name__)
 
@@ -249,18 +250,21 @@ class MealFSM:
 
 
 @dataclass(frozen=True, slots=True)
-class WakeState:
+class WakeState(Context):
     """명세의 context/wake.
 
     activity 는 '지금'의 상태, wake 는 '오늘 하루'의 누적이다.
     시간 스케일이 달라 별도로 유지한다.
+
+    추론이 아니라 플래그 집합이므로 confidence·factors 를 쓰지 않는다 (명세).
+    Context 를 상속하는 것은 발행 경로를 하나로 두기 위해서다.
 
     _prompted 는 되먹임 억제용 — 유도된 행동이 개인 분포를 오염시키지 않도록
     분리 기록한다.
     """
 
     state: str = "ASLEEP"              # ASLEEP / AWAKE
-    wake_t0: float | None = None       # 기상 확정 시각. KDE 기상 분포의 입력
+    wake_t0: float | None = None       # 침대를 떠난 시각. KDE 기상 분포의 입력
     hydration_done: bool = False
     hydration_prompted: bool = False
     meal_done: bool = False
@@ -268,7 +272,7 @@ class WakeState:
     medication_done: bool = False
     medication_prompted: bool = False
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self, now: float) -> dict[str, Any]:
         return {
             "state": self.state,
             "wake_t0": self.wake_t0,
@@ -279,6 +283,16 @@ class WakeState:
             "medication_done": self.medication_done,
             "medication_prompted": self.medication_prompted,
         }
+
+    def same_as(self, other: Context | None) -> bool:
+        if not isinstance(other, WakeState):
+            return False
+        return (
+            self.state == other.state
+            and self.hydration_done == other.hydration_done
+            and self.meal_done == other.meal_done
+            and self.medication_done == other.medication_done
+        )
 
 
 class WakeFSM:
@@ -302,7 +316,7 @@ class WakeFSM:
         self._config = config
         self._world = world
         self._log = t0log
-        self.state = WakeState()
+        self.state = WakeState(name="wake", since=clock.now())
         self._sleep_since: float | None = None
         self._logged_wake_date: str | None = None
 
@@ -318,7 +332,7 @@ class WakeFSM:
                 self._sleep_since = activity_since
             if now - self._sleep_since >= sleep_need and self.state.state == "AWAKE":
                 # 다음 기상을 위해 리셋한다 (명세: 리셋은 다음 기상 확정 시)
-                self.state = WakeState(state="ASLEEP")
+                self.state = WakeState(name="wake", since=now)
                 self._logged_wake_date = None
             else:
                 timers.append(("wake-sleep", self._sleep_since + sleep_need))
@@ -379,7 +393,7 @@ class WakeFSM:
 
     def _confirm_wake(self, wake_t0: float) -> None:
         """wake_t0 는 기상 확정 시각이 아니라 침대를 떠난 시각이다."""
-        self.state = WakeState(state="AWAKE", wake_t0=wake_t0)
+        self.state = WakeState(name="wake", since=wake_t0, state="AWAKE", wake_t0=wake_t0)
         date = day_key(wake_t0)
         if self._log is not None and self._logged_wake_date != date:
             self._logged_wake_date = date
