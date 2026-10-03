@@ -201,6 +201,28 @@ tv_off = 0.15
 washer_running = 0.50
 utility_motion = 0.25
 
+# ============================================================ 활동 묶음 (FSM)
+#
+# activity 는 기억이 없다 — 매 순간 센서를 보고 다시 계산한다.
+# FSM 은 "09:20 에 시작된 것이 지금도 진행 중"을 기억하고 t0 를 보관한다.
+#
+# t0 는 활동 묶음의 시작이다. MEAL_PREP -> EATING 전이에도 유지된다.
+# KDE 가 학습하는 것은 '식사를 시작한 시각'이고 그것은 조리를 시작한 때다.
+
+[fsm.meal]
+open_states = ["MEAL_PREP", "EATING"]   # KITCHEN_MISC 는 열지 않는다 (물 마시러 들른 것)
+close_grace_sec = 600                   # 묶음 상태를 벗어난 뒤 이만큼 지나면 닫는다
+min_duration_sec = 120                  # 이보다 짧으면 기록하지 않는다
+session_timeout_sec = 7200              # 강제 종료 (2시간)
+
+[fsm.wake]
+# activity 는 '지금'이고 wake 는 '오늘 하루의 누적'이다. 시간 스케일이 달라
+# 별도로 유지한다. 다음 기상 확정 시 리셋한다.
+sleep_confirm_sec = 600                 # SLEEPING 이 이만큼 지속돼야 ASLEEP 확정
+wake_confirm_sec = 300                  # 기상 후 이만큼 활동하면 AWAKE 확정
+hydration_window_sec = 7200             # 기상 후 이 안의 급수를 루틴으로 본다
+meal_window_sec = 10800                 # 기상 후 이 안의 식사를 루틴으로 본다
+
 
 # ============================================================ 이상 판정
 #

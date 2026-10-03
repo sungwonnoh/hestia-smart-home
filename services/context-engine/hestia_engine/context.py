@@ -13,7 +13,7 @@ recompute()  — 계산만 하고 발행하지 않는다. 그래서 몇 번 불�
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from .clock import Clock
@@ -602,8 +602,10 @@ class ContextEngine:
         world: WorldState,
         scheduler: Scheduler,
         on_change: Callable[[tuple[Context, ...]], None] | None = None,
+        t0log: Any | None = None,
     ) -> None:
         from .activity import ActivityContext, ActivityEvaluator   # 순환 import 회피
+        from .fsm import MealFSM, WakeFSM
 
         self._clock = clock
         self._sched = scheduler
@@ -613,10 +615,14 @@ class ContextEngine:
         self._occupancy_eval = OccupancyEvaluator(clock, config, world)
         self._activity_eval = ActivityEvaluator(clock, config, world)
 
+        self.meal_fsm = MealFSM(clock, config, world, t0log)
+        self.wake_fsm = WakeFSM(clock, config, world, t0log)
+
         self.presence: PresenceContext | None = None
         self.away: AwayContext | None = None
         self.occupancy: OccupancyContext | None = None
         self.activity: ActivityContext | None = None
+
 
     def recompute(self) -> tuple[Context, ...]:
         """전부 다시 계산하고, 직전과 다른 것만 돌려준다."""
@@ -644,6 +650,19 @@ class ContextEngine:
         # activity 는 presence 와 away 를 읽는다. 순서상 마지막.
         activity, t = self._activity_eval.evaluate(presence, away, self.activity)
         timers += t
+
+        # FSM 은 activity 를 읽기만 하고 t0 를 돌려준다 (단방향).
+        # 점수를 되돌려 바꾸면 순환이 생겨 추적이 불가능해진다.
+        timers += self.meal_fsm.update(
+            activity.state, in_meal_area=bool(presence.areas.get("kitchen"))
+        )
+        timers += self.wake_fsm.update(activity.state, activity.since)
+        if activity.state == "EATING":
+            self.wake_fsm.note_meal()
+
+        if self.meal_fsm.t0 is not None and activity.state in ("MEAL_PREP", "EATING"):
+            activity = replace(activity, t0=self.meal_fsm.t0)
+
         if not activity.same_as(self.activity):
             changed.append(activity)
         self.activity = activity
@@ -659,6 +678,17 @@ class ContextEngine:
             c for c in (self.presence, self.away, self.occupancy, self.activity)
             if c is not None
         )
+
+    def note_event(self, msg: Any) -> None:
+        """가전 이벤트를 wake 루틴에 반영한다.
+
+        Engine(2-12)이 ingest 에서 호출한다. 정수기 급수와 식사 전이가
+        기상 루틴의 _done 플래그를 채운다.
+        """
+        from . import messages as m
+
+        if isinstance(msg, m.DispensedEvent):
+            self.wake_fsm.note_hydration()
 
     # ------------------------------------------------------------ 타이머
 

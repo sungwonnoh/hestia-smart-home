@@ -89,6 +89,11 @@ channel = true
 id = "vd-08"
 device_type = "washer"
 area = "utility"
+
+[[devices]]
+id = "vd-06"
+device_type = "water_purifier"
+area = "kitchen"
 """
 
 POLICY = (Path(__file__).parents[3] / "config" / "policy.toml").read_text(encoding="utf-8")
@@ -436,7 +441,7 @@ def test_min_hold_arms_timer(c):
     c.at(MORNING + 110).presence("vs-11", False)
     c.at(MORNING + 141).tick()
     assert "ctx-activity-hold" in c.sched.keys()
-    
+
 
 def test_unknown_does_not_block_transition(c):
     """모름에서 벗어나는 것은 떨림이 아니다. min_hold 로 막지 않는다."""
