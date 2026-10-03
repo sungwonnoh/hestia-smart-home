@@ -124,38 +124,81 @@ class Replay:
             fired += self._sched.run_due(until=due)
 
 
-def replay_file(path: Path, *, start: float | None = None, echo: bool = True):
-    """한 줄짜리 조립. 테스트와 CLI 가 공유"""
-    from .sink import EchoSink
+def replay_file(
+    path: Path,
+    *,
+    start: float | None = None,
+    echo: bool = True,
+    home: str = "demo",
+    profile: str | None = None,
+):
+    """한 줄짜리 조립. 테스트와 CLI 가 공유.
+
+    Engine 이 Sink 프로토콜을 만족하므로 Replay 가 그대로 받는다.
+    0단계에서 Sink 를 인터페이스로 둔 것이 여기서 값을 한다.
+    """
+    from .config import load_default
+    from .engine import Engine, RecordingPublisher
+    from .fsm import MemoryT0Log
+    from .world import WorldState
 
     clock = ReplayClock(start if start is not None else 0.0)
+    config = load_default(home=home)
+    if profile is not None:
+        config.set_profile(profile)
+
     sched = Scheduler(clock)
-    sink = EchoSink(clock, echo=echo)
-    result = Replay(clock, sched, sink).run(path)
-    return result, sink
+    world = WorldState(clock, config, sched)
+    t0log = MemoryT0Log()
+    pub = RecordingPublisher(echo=echo)
+    engine = Engine(clock, config, world, sched, pub, t0log)
+
+    result = Replay(clock, sched, engine).run(path)
+    return result, engine, pub, t0log
 
 
 def main(argv: list[str] | None = None) -> int:
-    #CLI에서 이 모듈을 직접 실행했을 때 사용자의 명령줄 인자를 받아 처리하고 로그 재생을 실행한 뒤 최종 결과를 리포트
     import argparse
+
+    from .timeutil import clock_str
 
     parser = argparse.ArgumentParser(description="HESTIA JSONL 재생기")
     parser.add_argument("path", type=Path, help="입력 JSONL")
-    parser.add_argument("-q", "--quiet", action="store_true", help="메시지별 출력 생략")
-    args = parser.parse_args(argv)      #입력받은 인자들을 분석하여 args 객체에 저장
+    parser.add_argument("-q", "--quiet", action="store_true", help="발행 출력 생략")
+    parser.add_argument("--home", default="demo", help="config/homes/<name>.toml")
+    parser.add_argument("--profile", choices=("REAL", "DEMO"), help="프로파일")
+    parser.add_argument("-v", "--verbose", action="store_true", help="디버그 로그")
+    args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.WARNING,
+        format="%(levelname)s %(message)s",
+    )
 
     if not args.path.exists():
         parser.error(f"파일 없음: {args.path}")
 
-    result, sink = replay_file(args.path, echo=not args.quiet)
+    result, engine, pub, t0log = replay_file(
+        args.path, echo=not args.quiet, home=args.home, profile=args.profile
+    )
 
     print(
         f"\n{result.lines}줄 재생, 가상 경과 {result.span_sec / 3600:.1f}시간, "
-        f"타이머 {result.timers_fired}건 — {sink.summary()}"
-        #출력 예시: 3500줄 재생, 가상 경과 8.5시간, 타이머 12건 — 수신 3498건, 폐기 2건
+        f"타이머 {result.timers_fired}건 — {engine.summary()}"
     )
+    print(f"context 발행 {pub.count}건")
+
+    if t0log.entries:
+        print("\nt0 로그")
+        for e in t0log.entries:
+            print(f"  {e.date}  {e.type:10} {clock_str(e.t0)}  "
+                  f"{e.duration_sec:>6.0f}초  prompted={e.prompted}")
+
+    final = engine.context
+    if final.activity is not None:
+        print(f"\n최종 상태: {final.activity.state} / "
+              f"{final.presence.user_area} / {final.away.state} / {final.occupancy.state}")
+
     return 0
 
 
