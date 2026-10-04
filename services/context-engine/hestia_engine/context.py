@@ -889,9 +889,8 @@ class ContextEngine:
 
     def _on_timer(self) -> None:
         """타이머가 부르는 진입점.
-
-        여기서 콜백을 부르지 않으면 시간 경과로 일어난 전이가 발행되지 않는다.
+           changed 가 비어도 콜백을 부른다 — 시나리오는 context 변화가 아니라 시간 경과로 성립하는 조건(기상 후 N분)을 본다.
         """
         changed = self.recompute()
-        if changed and self._on_change is not None:
+        if self._on_change is not None:
             self._on_change(changed)

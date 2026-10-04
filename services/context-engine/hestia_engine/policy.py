@@ -91,7 +91,7 @@ class InterventionPolicy:       # 개입 관련 정책
         *,
         scenario: str = "WAKE_ROUTINE",
     ) -> Decision:
-        """기상 시각이 평소보다 늦은가."""
+        """기상 시각이 평소보다 늦은가. 자정 기준 분포."""
         return self._evaluate(
             kind="wake",
             dist_name="wake_time",
@@ -101,6 +101,31 @@ class InterventionPolicy:       # 개입 관련 정책
             suppression=suppression,
             done=False,
             scenario=scenario,
+        )
+
+    def evaluate_hydration(
+        self,
+        away: AwayContext,
+        occupancy: OccupancyContext,
+        suppression: SuppressionContext,
+        wake_t0: float,
+        hydration_done: bool,
+        *,
+        scenario: str = "WAKE_ROUTINE",
+    ) -> Decision:
+        """기상 후 물을 마시지 않은 시간이 평소보다 긴가.
+           기준점이 자정이 아니라 기상 시각이다 — "몇 시에" 가 아니라 "기상하고 몇 분 만에" 를 묻는 분포이기 때문이다.
+        """
+        return self._evaluate(
+            kind="hydration",
+            dist_name="hydration_lag",
+            threshold_key="hydration",
+            away=away,
+            occupancy=occupancy,
+            suppression=suppression,
+            done=hydration_done,
+            scenario=scenario,
+            since=wake_t0,
         )
 
     # ------------------------------------------------------------ 내부
@@ -116,12 +141,19 @@ class InterventionPolicy:       # 개입 관련 정책
         suppression: SuppressionContext,    # 알림 억제 중인지
         done: bool,                         # 오늘 이미 했는지
         scenario: str,                      # 억제 예외 확인용 시나리오 이름, 예: "MEDICATION_PROMPT"
+        since: float | None = None,         # 상대 분포의 기준 시각
     ) -> Decision:
         now = self._clock.now()
         factors: dict[str, Any] = {}        # 판단 근거를 쌓는 dict
 
+        # 기준점이 자정인 분포와 다른 사건인 분포를 가른다.
+        # hydration_lag 는 "기상 후 몇 분" 이라 since 가 기상 시각이다.
+        if since is None:
+            minutes = minutes_since_midnight(now)
+        else:
+            minutes = (now - since) / 60.0
+
         # ① 모델 확인: 모델이 없으면 비교할 기준이 없음
-        minutes = minutes_since_midnight(now)
         result = query(self._store, dist_name, minutes)
         if result is None:
             return Decision(False, NO_MODEL, kind, factors=factors)
