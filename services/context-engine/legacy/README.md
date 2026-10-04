@@ -7,15 +7,16 @@ Context Engine 재구성(PR #13) 이전 코드. `hestia_engine/` 패키지가 �
 
 ## 파일별 처분
 
-| 파일              | 줄  | 대체                                     | 살릴 로직                                       |
-| ----------------- | --- | ---------------------------------------- | ----------------------------------------------- |
-| `engine.py`       | 264 | `hestia_engine/engine.py` + `context.py` | MQTT 배선 패턴 (runner.py 작성 시), 게이팅 순서 |
-| `replay.py`       | 120 | `hestia_engine/replay.py`                | 없음 — 타이머가 없어 시간 기반 전이가 묻힌다    |
-| `kde_model.py`    | 180 | `hestia_engine/model.py`                 | 격자 검증, 꼬리확률 누적합                      |
-| `meal_policy.py`  | 66  | `hestia_engine/model.py`                 | reason 코드 넷, 임계값(policy.toml 로 이동)     |
-| `kde_context.py`  | 48  | `hestia_engine/model.py`                 | 조회 흐름                                       |
-| `model_store.py`  | 38  | `hestia_engine/model.py`                 | 보관 구조                                       |
-| `model_ingest.py` | 30  | `messages.py` 의 `_dispatch`             | 없음                                            |
+| 파일                            | 줄  | 대체                                     | 살릴 로직                                                   |
+| ------------------------------- | --- | ---------------------------------------- | ----------------------------------------------------------- |
+| `engine.py`                     | 264 | `hestia_engine/engine.py` + `context.py` | MQTT 배선 패턴 (runner.py 작성 시), 게이팅 순서             |
+| `replay.py`                     | 120 | `hestia_engine/replay.py`                | 없음 — 타이머가 없어 시간 기반 전이가 묻힌다                |
+| `kde_model.py`                  | 180 | `hestia_engine/model.py`                 | 격자 검증, 꼬리확률 누적합                                  |
+| `meal_policy.py`                | 66  | `hestia_engine/model.py`                 | reason 코드 넷, 임계값(policy.toml 로 이동)                 |
+| `kde_context.py`                | 48  | `hestia_engine/model.py`                 | 조회 흐름                                                   |
+| `model_store.py`                | 38  | `hestia_engine/model.py`                 | 보관 구조                                                   |
+| `model_ingest.py`               | 30  | `messages.py` 의 `_dispatch`             | 없음                                                        |
+| `validate_real_aruba_policy.py` | —   | —                                        | Aruba 실측 검증 스크립트. `meal_policy` 에 의존해 함께 옮김 |
 
 746줄 중 실제로 옮길 로직은 80줄 안쪽이다. 이식이 아니라 재작성이다.
 
