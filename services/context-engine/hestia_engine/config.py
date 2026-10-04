@@ -237,10 +237,16 @@ class Config:
         table = self.policy.get("notify", {})
         merged = dict(table.get("default", {}))
         merged.update(table.get(scenario, {}))
+
         scale = self._time_scale()
-        for key in ("ack_deadline_sec", "cooldown_sec"):
+        for key in ("ack_deadline_sec", "cooldown_sec", "expiry_sec"):
             if key in merged:
                 merged[key] = float(merged[key]) * scale
+
+        #"comply_window_min"은 분 단위라 따로 처리
+        if "comply_window_min" in merged:
+            merged["comply_window_min"] = float(merged["comply_window_min"]) * scale
+            
         return merged
 
     def timeout(self, *path: str) -> float:

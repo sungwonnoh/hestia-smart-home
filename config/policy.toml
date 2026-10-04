@@ -289,18 +289,24 @@ affinity = ["smart_tv", "smart_fridge"]   # default 에도 필요 — 시나리�
 [notify.WAKE_ROUTINE]
 affinity = ["smart_fridge", "smart_tv"]
 comply_window_min = 30
+title = "수분 섭취"
+text = "물 한 잔 드세요"
 
 [notify.MEDICATION_PROMPT]
 affinity = ["smart_fridge", "smart_tv"]
-requires_ack = true               # 복약은 이벤트로 판정 불가
+requires_ack = true
 comply_window_min = 60
+title = "복약 시간"
+text = "식사 후 약 드실 시간입니다"
 
 [notify.SAFETY]
 affinity = ["smart_tv", "smart_light", "voice"]
 requires_ack = true
 ack_deadline_sec = 120
 cooldown_sec = 0
-max_escalation = 0                # 0 = 무제한. ack 수신까지 지속
+max_escalation = 0
+title = "확인이 필요합니다"
+text = "괜찮으신가요?"
 
 
 # ============================================================ 총량 제한
@@ -348,3 +354,12 @@ observe_scale = 0.1
 
 [publish]
 interval_sec = 300
+
+# ============================================================ 시나리오
+#
+# 트리거 조건. 판정 임계값은 [thresholds.*], 전달 정책은 [notify.*] 에 있다.
+
+[scenarios.wake]
+# 기상 직후 몇 분은 묻지 않는다. 일어나자마자 물을 마시는 사람도 있고
+# 화장실부터 가는 사람도 있다. 그 사이에 물으면 성가시기만 하다.
+hydration_grace_sec = 900

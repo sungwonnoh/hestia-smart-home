@@ -26,6 +26,8 @@ from .timers import Scheduler
 from .world import WorldState
 from .model import ModelStore
 from .policy import InterventionPolicy
+from .notify import Notifier
+from .scenarios import ScenarioRunner
 
 log = logging.getLogger(__name__)
 
@@ -109,13 +111,24 @@ class Engine:
         # 이 콜백이 없으면 시간 경과로만 일어나는 전이가 전부 묻힌다.
         self.context = ContextEngine(
             clock, config, world, scheduler,
-            on_change=self._publish_all,
+            on_change=self._on_context_change,
             t0log=t0log,
             models=self.models,
         )
 
         # 개입 판정. 부를 곳(알림 층)이 아직 없어 자리만 둔다.
         self.policy = InterventionPolicy(clock, config, self.models)
+
+        # 알림 전달. publish 를 주입해 엔진과 같은 Publisher 를 쓴다 —
+        # Replay 에서 context 와 알림이 한 리스트에 시간순으로 쌓인다.
+        self.notifier = Notifier(
+            clock, config, world, scheduler,
+            publish=self._publish_raw,
+            wake_fsm=self.context.wake_fsm,
+        )
+        self.scenarios = ScenarioRunner(
+            clock, config, self.policy, self.notifier, publish=self._publish_raw
+        )
 
         self.received = 0
         self.dropped = 0
@@ -156,7 +169,11 @@ class Engine:
             # 검증에 실패하면 교체하지 않는다 — 직전 모델로 계속 판단한다
             self.models.apply(msg)
 
+        if isinstance(msg, m.NotifyAck):
+            self.notifier.on_ack(msg.notify_id, msg.ack_type, msg.src_id)
+
         self._publish_all(self.context.recompute())
+        self.scenarios.tick(self.context)
         self._arm_periodic()
 
     # ------------------------------------------------------------ 발행
@@ -164,6 +181,21 @@ class Engine:
     def _publish_all(self, contexts: tuple[Context, ...]) -> None:
         for ctx in contexts:
             self._publish(ctx)
+
+    def _publish_raw(self, topic: str, payload: dict[str, Any], retain: bool) -> None:
+        """Notifier 와 ScenarioRunner 가 쓰는 발행 통로.
+           이미 Envelope 를 갖춘 페이로드를 그대로 내보낸다 — _publish 는 Context 객체를 받아 Envelope 를 얹는 쪽이다.
+        """
+        self._pub.publish(topic, payload, retain=retain)
+
+    def _on_context_change(self, contexts: tuple[Context, ...]) -> None:
+        """타이머가 바꾼 context.
+           발행만 하고 끝내면 시간 경과로만 성립하는 시나리오 조건(기상 후 N분 물을 안 마심)이 영영 안 걸린다.
+        """
+        self._publish_all(contexts)
+        runner = getattr(self, "scenarios", None)
+        if runner is not None:
+            runner.tick(self.context)
 
     def _publish(self, ctx: Context) -> None:
         """hestia/context/{name}, QoS 1, retained.
