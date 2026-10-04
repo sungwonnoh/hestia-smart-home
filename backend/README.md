@@ -105,3 +105,19 @@ docker exec hestia-api python scripts/mock_mqtt.py
 docker stop hestia-engine && docker exec hestia-api python scripts/mock_mqtt.py --mode full
 docker start hestia-engine
 ```
+
+## Flutter 계약 fixture
+
+`apps/test/fixtures/api/` 를 Backend 와 Flutter 테스트가 같이 쓴다.
+
+| 경로 | 만드는 쪽 | 검증하는 쪽 |
+|---|---|---|
+| `responses/*.json` | `scripts/export_api_fixtures.py` (mock_mqtt 시나리오를 넣은 실제 응답) | `apps/test/api_contract_test.dart` 가 파싱 |
+| `requests/*.json` | Flutter 모델 `toJson` 결과 (`api_contract_test.dart` 가 일치 확인) | `tests/test_contract.py` 가 서버에 보내 저장 확인 |
+
+응답 구조를 바꾸면 `tests/test_contract.py` 가 실패한다. fixture 를 다시 만들고 Flutter 테스트를 돌린다.
+
+```bash
+python scripts/export_api_fixtures.py
+cd ../apps && flutter test test/api_contract_test.dart
+```

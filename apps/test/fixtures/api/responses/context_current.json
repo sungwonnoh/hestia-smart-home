@@ -1,0 +1,30 @@
+{
+  "activity": {
+    "state": "MEAL_DONE",
+    "since": 1791116661,
+    "confidence": 0.87,
+    "factors": {
+      "area": "kitchen",
+      "presence": true
+    }
+  },
+  "presence": {
+    "area": "kitchen",
+    "since": 1791116661,
+    "areas": {
+      "living": false,
+      "kitchen": true
+    },
+    "confidence": 0.9,
+    "factors": {}
+  },
+  "away": {
+    "state": "HOME",
+    "confidence": 0.95,
+    "factors": {}
+  },
+  "occupancy": {
+    "state": "SINGLE",
+    "factors": {}
+  }
+}

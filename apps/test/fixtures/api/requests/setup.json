@@ -1,0 +1,20 @@
+{
+  "rooms": [
+    {"id": "living", "name": "거실", "roles": ["LIVING"]},
+    {"id": "kitchen", "name": "주방", "roles": ["MEAL"]},
+    {"id": "utility", "name": "다용도실", "roles": ["LAUNDRY"]}
+  ],
+  "devices": [
+    {"id": "tv-01", "name": "거실 TV", "type": "TV", "roomId": "living", "status": {"state": "UNKNOWN"}, "online": true},
+    {"id": "light-01", "name": "거실 조명", "type": "LIGHT", "roomId": "living", "status": {"state": "UNKNOWN"}, "online": true},
+    {"id": "air-conditioner-01", "name": "거실 에어컨", "type": "AIR_CONDITIONER", "roomId": "living", "status": {"state": "UNKNOWN"}, "online": true},
+    {"id": "refrigerator-01", "name": "주방 냉장고", "type": "REFRIGERATOR", "roomId": "kitchen", "status": {"state": "UNKNOWN"}, "online": true},
+    {"id": "washer-01", "name": "다용도실 세탁기", "type": "WASHER", "roomId": "utility", "status": {"state": "UNKNOWN"}, "online": true}
+  ],
+  "preferences": {
+    "notificationsEnabled": true,
+    "quietHours": {"enabled": true, "start": "22:30", "end": "07:00"},
+    "sensitivity": "high",
+    "safety": {"enabled": true, "emergencyContact": "010-1234-5678"}
+  }
+}

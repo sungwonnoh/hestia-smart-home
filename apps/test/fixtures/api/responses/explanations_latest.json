@@ -1,0 +1,22 @@
+{
+  "id": "6",
+  "contextName": "activity",
+  "state": "MEAL_DONE",
+  "confidence": 0.87,
+  "factors": [
+    {
+      "key": "area",
+      "value": "kitchen",
+      "label": "주방 재실 감지",
+      "satisfied": true
+    },
+    {
+      "key": "presence",
+      "value": true,
+      "label": "재실 감지",
+      "satisfied": true
+    }
+  ],
+  "action": "'식사 후 복약 시간입니다.' 알림을 보냈습니다.",
+  "createdAt": "2026-10-04T21:24:21+09:00"
+}

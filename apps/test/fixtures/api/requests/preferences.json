@@ -1,0 +1,6 @@
+{
+  "notificationsEnabled": false,
+  "quietHours": {"enabled": false, "start": "23:00", "end": "06:30"},
+  "sensitivity": "low",
+  "safety": {"enabled": true}
+}

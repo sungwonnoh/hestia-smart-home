@@ -1,0 +1,15 @@
+[
+  {
+    "id": "n-mock-1791116661",
+    "scenario": "MEDICATION",
+    "type": "REMINDER",
+    "priority": "normal",
+    "title": "식사 후 복약 시간입니다.",
+    "message": "HESTIA가 식사 완료를 감지했습니다.\n복약 시간을 확인해주세요.",
+    "createdAt": "2026-10-04T21:24:21+09:00",
+    "roomId": "living",
+    "explanationId": "6",
+    "delivered": false,
+    "seen": false
+  }
+]

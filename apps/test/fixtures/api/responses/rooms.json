@@ -1,0 +1,23 @@
+[
+  {
+    "id": "living",
+    "name": "거실",
+    "roles": [
+      "LIVING"
+    ]
+  },
+  {
+    "id": "kitchen",
+    "name": "주방",
+    "roles": [
+      "MEAL"
+    ]
+  },
+  {
+    "id": "utility",
+    "name": "다용도실",
+    "roles": [
+      "LAUNDRY"
+    ]
+  }
+]
