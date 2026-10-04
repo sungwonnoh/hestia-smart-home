@@ -1,0 +1,75 @@
+[
+  {
+    "id": "air-conditioner-01",
+    "name": "거실 에어컨",
+    "type": "AIR_CONDITIONER",
+    "roomId": "living",
+    "status": {
+      "power": "ON",
+      "mode": "COOL",
+      "temp_set": 24,
+      "temp_room": 26.5,
+      "targetTemp": 24,
+      "state": "ON"
+    },
+    "online": true,
+    "virtualId": "vd-03",
+    "lastSeenAt": "2026-10-04T20:36:04+09:00"
+  },
+  {
+    "id": "light-01",
+    "name": "거실 조명",
+    "type": "LIGHT",
+    "roomId": "living",
+    "status": {
+      "power": "ON",
+      "brightness": 70,
+      "state": "ON"
+    },
+    "online": true,
+    "virtualId": "vd-02",
+    "lastSeenAt": "2026-10-04T20:36:04+09:00"
+  },
+  {
+    "id": "refrigerator-01",
+    "name": "주방 냉장고",
+    "type": "REFRIGERATOR",
+    "roomId": "kitchen",
+    "status": {
+      "door": "CLOSED",
+      "state": "ON"
+    },
+    "online": true,
+    "virtualId": "vd-05",
+    "lastSeenAt": "2026-10-04T20:36:04+09:00"
+  },
+  {
+    "id": "tv-01",
+    "name": "거실 TV",
+    "type": "TV",
+    "roomId": "living",
+    "status": {
+      "power": "ON",
+      "volume": 12,
+      "state": "ON"
+    },
+    "online": true,
+    "virtualId": "vd-01",
+    "lastSeenAt": "2026-10-04T20:36:04+09:00"
+  },
+  {
+    "id": "washer-01",
+    "name": "다용도실 세탁기",
+    "type": "WASHER",
+    "roomId": "utility",
+    "status": {
+      "power": "ON",
+      "cycle": "DONE",
+      "remain_min": 0,
+      "state": "DONE"
+    },
+    "online": true,
+    "virtualId": "vd-08",
+    "lastSeenAt": "2026-10-04T20:36:04+09:00"
+  }
+]

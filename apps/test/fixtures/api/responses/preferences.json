@@ -1,0 +1,13 @@
+{
+  "notificationsEnabled": true,
+  "quietHours": {
+    "enabled": true,
+    "start": "22:30",
+    "end": "07:00"
+  },
+  "sensitivity": "high",
+  "safety": {
+    "enabled": true,
+    "emergencyContact": "010-1234-5678"
+  }
+}
