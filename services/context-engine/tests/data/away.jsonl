@@ -1,0 +1,12 @@
+# 외출 → AWAY → 귀가 (2026-09-25 10:00 KST 기준)
+# 현관 개폐 후 전 구역 10분 무반응이면 AWAY. 문 없이 조용하면 UNKNOWN 이다.
+{"ts": 1790298000, "topic": "hestia/node/esp32-1/status", "payload": {"version": 1, "sent_ts": 1790297998, "src_id": "esp32-1", "online": true, "ts_synced": true}}
+{"ts": 1790298010, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790298008, "src_id": "vs-01", "seq": 1, "type": "presence", "present": true, "confidence": "high", "energy": 45, "distance_cm": 190}}
+{"ts": 1790298300, "topic": "hestia/sensor/vs-15/state", "payload": {"version": 1, "sent_ts": 1790298298, "src_id": "vs-15", "seq": 1, "type": "motion", "motion": true, "confidence": "low"}}
+{"ts": 1790298310, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790298308, "src_id": "vs-01", "seq": 2, "type": "presence", "present": false, "confidence": "high", "energy": 0, "distance_cm": 0}}
+{"ts": 1790298320, "topic": "hestia/sensor/vs-14/state", "payload": {"version": 1, "sent_ts": 1790298318, "src_id": "vs-14", "seq": 1, "type": "door", "open": true}}
+{"ts": 1790298330, "topic": "hestia/sensor/vs-14/state", "payload": {"version": 1, "sent_ts": 1790298328, "src_id": "vs-14", "seq": 2, "type": "door", "open": false}}
+{"ts": 1790299200, "topic": "hestia/sensor/vs-14/state", "payload": {"version": 1, "sent_ts": 1790299198, "src_id": "vs-14", "seq": 3, "type": "door", "open": true}}
+{"ts": 1790299210, "topic": "hestia/sensor/vs-15/state", "payload": {"version": 1, "sent_ts": 1790299208, "src_id": "vs-15", "seq": 2, "type": "motion", "motion": true, "confidence": "low"}}
+{"ts": 1790299220, "topic": "hestia/sensor/vs-14/state", "payload": {"version": 1, "sent_ts": 1790299218, "src_id": "vs-14", "seq": 4, "type": "door", "open": false}}
+{"ts": 1790299260, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790299258, "src_id": "vs-01", "seq": 3, "type": "presence", "present": true, "confidence": "high", "energy": 50, "distance_cm": 185}}
