@@ -199,6 +199,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n최종 상태: {final.activity.state} / "
               f"{final.presence.user_area} / {final.away.state} / {final.occupancy.state}")
 
+    if engine.models.has("kde"):
+        print(f"\nKDE 모델 수신: trained_at={clock_str(engine.models.trained_at('kde'))}, "
+              f"{engine.models.sample_days()}일치")
+
     return 0
 
 

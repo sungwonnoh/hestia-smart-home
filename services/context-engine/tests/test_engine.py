@@ -298,3 +298,83 @@ def test_replay_final_state():
     assert ctx.away.state == "HOME"
     assert ctx.occupancy.state == "SINGLE"
     assert ctx.activity.state in ("EATING", "KITCHEN_MISC")
+
+# ============================================================ 모델 연동
+
+
+def test_engine_has_model_store(c):
+    from hestia_engine.model import ModelStore
+    from hestia_engine.policy import InterventionPolicy
+
+    assert isinstance(c.engine.models, ModelStore)
+    assert isinstance(c.engine.policy, InterventionPolicy)
+
+
+def test_model_message_is_stored(c):
+    """hestia/model/kde 를 받으면 보관한다."""
+    from test_model import kde_payload
+
+    c.send("hestia/model/kde", kde_payload())
+    assert c.engine.models.has("kde") is True
+    assert c.engine.models.sample_days() == 21
+
+
+def test_broken_model_does_not_replace_in_engine(c):
+    """깨진 모델이 와도 직전 모델로 계속 판단한다."""
+    from test_model import kde_payload
+
+    c.send("hestia/model/kde", kde_payload())
+    good = c.engine.models.get("kde")
+
+    bad = kde_payload(meal_time={"grid_min": 0, "grid_step": 15, "density": [1.0] * 10})
+    c.at(MORNING + 100).send("hestia/model/kde", bad)
+    assert c.engine.models.get("kde") is good
+
+
+def test_percentile_absent_without_model(c):
+    """모델이 없으면 factors 에 넣지 않는다 — '모른다' 와 '0.0' 은 다르다."""
+    c.presence("vs-04", True)
+    assert "meal_time_percentile" not in c.engine.context.activity.factors
+
+
+def test_percentile_appears_with_model(c):
+    """명세의 factors 예시에 있는 값."""
+    from test_model import kde_payload, peaked
+
+    c.send("hestia/model/kde", kde_payload(meal_time=peaked(450)))
+    c.at(MORNING + 10).presence("vs-04", True)
+
+    f = c.engine.context.activity.factors
+    assert "meal_time_percentile" in f
+    assert f["meal_time_percentile"] > 0.9       # 09:40 은 07:30 봉우리 한참 뒤
+
+
+def test_percentile_does_not_change_score(c):
+    """지금은 표시만 한다. 점수에 반영하면 되먹임이 생긴다."""
+    from test_model import kde_payload, peaked
+
+    c.presence("vs-04", True)
+    c.at(MORNING + 10).presence("vs-04", True)
+    before = dict(c.engine.context.activity.scores)      # 히스테리시스 이미 붙음
+
+    c.at(MORNING + 20).send("hestia/model/kde", kde_payload(meal_time=peaked(450)))
+    c.at(MORNING + 30).presence("vs-04", True)
+
+    assert "meal_time_percentile" in c.engine.context.activity.factors
+    assert c.engine.context.activity.scores == before    # 점수는 그대로
+
+
+def test_policy_reads_engine_store(c):
+    """Engine 과 Policy 가 같은 ModelStore 를 본다."""
+    from test_model import kde_payload, peaked
+    from hestia_engine.policy import ANOMALY
+
+    c.send("hestia/model/kde", kde_payload(meal_time=peaked(450)))
+    c.at(MORNING + 10).presence("vs-04", True)
+
+    ctx = c.engine.context
+    d = c.engine.policy.evaluate_meal(
+        ctx.away, ctx.occupancy, ctx.suppression, meal_done=False
+    )
+    assert d.candidate is True
+    assert d.reason == ANOMALY

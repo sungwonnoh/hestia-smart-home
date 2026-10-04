@@ -216,6 +216,16 @@ tv_off = 0.15
 washer_running = 0.50
 utility_motion = 0.25
 
+# 개인 분포를 activity 점수에 반영하는 가중치.
+#
+# 0 이면 factors 에 표시만 하고 점수는 건드리지 않는다. 켜려면 셋이 선행돼야
+# 한다 — 분포가 판정을 뒤집지 못할 만큼 낮은 값, sample_days 하한,
+# predictability 하한. 되먹임(분포 -> activity -> t0 -> 분포)을 막기 위해서다.
+[activity.baseline]
+percentile_weight = 0.0
+min_sample_days = 14
+min_predictability = 0.12
+
 # ============================================================ 활동 묶음 (FSM)
 #
 # activity 는 기억이 없다 — 매 순간 센서를 보고 다시 계산한다.

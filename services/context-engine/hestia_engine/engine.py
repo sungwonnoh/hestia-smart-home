@@ -24,6 +24,8 @@ from .context import Context, ContextEngine
 from .messages import Message, parse
 from .timers import Scheduler
 from .world import WorldState
+from .model import ModelStore
+from .policy import InterventionPolicy
 
 log = logging.getLogger(__name__)
 
@@ -100,13 +102,20 @@ class Engine:
         self._sched = scheduler
         self._pub = publisher or NullPublisher()
 
+        # RPi4 배치가 발행한 모델. retained 라 재시작 시 즉시 복원된다.
+        self.models = ModelStore()
+
         # 타이머가 바꾼 context 도 같은 경로로 발행되어야 한다.
         # 이 콜백이 없으면 시간 경과로만 일어나는 전이가 전부 묻힌다.
         self.context = ContextEngine(
             clock, config, world, scheduler,
             on_change=self._publish_all,
             t0log=t0log,
+            models=self.models,
         )
+
+        # 개입 판정. 부를 곳(알림 층)이 아직 없어 자리만 둔다.
+        self.policy = InterventionPolicy(clock, config, self.models)
 
         self.received = 0
         self.dropped = 0
@@ -142,6 +151,10 @@ class Engine:
             # 변경 전 매핑으로 진행 중이던 판단은 무효다.
             self._config.apply_registry(msg.devices)
             self._reset_contexts()
+
+        if isinstance(msg, m.ModelMessage):
+            # 검증에 실패하면 교체하지 않는다 — 직전 모델로 계속 판단한다
+            self.models.apply(msg)
 
         self._publish_all(self.context.recompute())
         self._arm_periodic()
