@@ -1,15 +1,13 @@
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
-sys.path.append(
-    str(ROOT / "services" / "learning-engine")
-)
+# legacy/ — meal_policy
+sys.path.append(str(Path(__file__).resolve().parent))
 
-sys.path.append(
-    str(ROOT / "services" / "context-engine")
-)
+# baseline
+sys.path.append(str(ROOT / "services" / "learning-engine"))
 
 
 from baseline import build_model

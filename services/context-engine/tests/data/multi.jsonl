@@ -1,0 +1,15 @@
+# 두 구역 동시 재실 → MULTI (2026-09-25 19:00 KST 기준)
+# 거실과 주방 양쪽에 mmWave 가 2분 이상 동시에 떠야 한다.
+# PIR 만으로는 못 간다 — multi_min_confidence 0.8 > pir 최대 0.6
+{"ts": 1790330400, "topic": "hestia/node/esp32-1/status", "payload": {"version": 1, "sent_ts": 1790330398, "src_id": "esp32-1", "online": true, "ts_synced": true}}
+{"ts": 1790330410, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790330408, "src_id": "vs-01", "seq": 1, "type": "presence", "present": true, "confidence": "high", "energy": 48, "distance_cm": 195}}
+{"ts": 1790330500, "topic": "hestia/sensor/vs-14/state", "payload": {"version": 1, "sent_ts": 1790330498, "src_id": "vs-14", "seq": 1, "type": "door", "open": true}}
+{"ts": 1790330510, "topic": "hestia/sensor/vs-14/state", "payload": {"version": 1, "sent_ts": 1790330508, "src_id": "vs-14", "seq": 2, "type": "door", "open": false}}
+{"ts": 1790330520, "topic": "hestia/sensor/vs-15/state", "payload": {"version": 1, "sent_ts": 1790330518, "src_id": "vs-15", "seq": 1, "type": "motion", "motion": true, "confidence": "low"}}
+{"ts": 1790330560, "topic": "hestia/sensor/vs-05/state", "payload": {"version": 1, "sent_ts": 1790330558, "src_id": "vs-05", "seq": 1, "type": "motion", "motion": true, "confidence": "low"}}
+{"ts": 1790330570, "topic": "hestia/sensor/vs-04/state", "payload": {"version": 1, "sent_ts": 1790330568, "src_id": "vs-04", "seq": 1, "type": "presence", "present": true, "confidence": "high", "energy": 44, "distance_cm": 170}}
+{"ts": 1790330700, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790330698, "src_id": "vs-01", "seq": 2, "type": "presence", "present": true, "confidence": "high", "energy": 40, "distance_cm": 190}}
+{"ts": 1790330760, "topic": "hestia/sensor/vs-04/state", "payload": {"version": 1, "sent_ts": 1790330758, "src_id": "vs-04", "seq": 2, "type": "presence", "present": true, "confidence": "high", "energy": 46, "distance_cm": 175}}
+{"ts": 1790331000, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790330998, "src_id": "vs-01", "seq": 3, "type": "presence", "present": true, "confidence": "high", "energy": 43, "distance_cm": 192}}
+{"ts": 1790331300, "topic": "hestia/sensor/vs-04/state", "payload": {"version": 1, "sent_ts": 1790331298, "src_id": "vs-04", "seq": 3, "type": "presence", "present": false, "confidence": "high", "energy": 0, "distance_cm": 0}}
+{"ts": 1790331400, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790331398, "src_id": "vs-01", "seq": 4, "type": "presence", "present": true, "confidence": "high", "energy": 45, "distance_cm": 190}}

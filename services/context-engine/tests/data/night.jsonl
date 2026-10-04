@@ -1,0 +1,23 @@
+# 취침 → 야간 화장실 → 복귀 (2026-09-25 22:00 KST 기준)
+# 수면 중 화장실은 기상이 아니다. wake 는 다음 아침까지 ASLEEP 이어야 한다.
+{"ts": 1790341200, "topic": "hestia/node/esp32-1/status", "payload": {"version": 1, "sent_ts": 1790341198, "src_id": "esp32-1", "online": true, "ts_synced": true}}
+{"ts": 1790341210, "topic": "hestia/device/vd-01/state", "payload": {"version": 1, "sent_ts": 1790341208, "src_id": "vd-01", "seq": 1, "device_type": "smart_tv", "source": "mock", "power": "ON"}}
+{"ts": 1790341220, "topic": "hestia/device/vd-01/event", "payload": {"version": 1, "sent_ts": 1790341218, "src_id": "vd-01", "seq": 2, "device_type": "smart_tv", "source": "mock", "event_type": "remote_input", "button": "VOL_DOWN"}}
+{"ts": 1790341230, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790341228, "src_id": "vs-01", "seq": 1, "type": "presence", "present": true, "confidence": "high", "energy": 20, "distance_cm": 180}}
+{"ts": 1790341240, "topic": "hestia/sensor/vs-02/state", "payload": {"version": 1, "sent_ts": 1790341238, "src_id": "vs-02", "seq": 1, "type": "bed", "occupied": true}}
+{"ts": 1790342400, "topic": "hestia/device/vd-01/state", "payload": {"version": 1, "sent_ts": 1790342398, "src_id": "vd-01", "seq": 3, "device_type": "smart_tv", "source": "mock", "power": "OFF"}}
+{"ts": 1790342410, "topic": "hestia/sensor/vs-02/state", "payload": {"version": 1, "sent_ts": 1790342408, "src_id": "vs-02", "seq": 2, "type": "bed", "occupied": false}}
+{"ts": 1790342420, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790342418, "src_id": "vs-01", "seq": 2, "type": "presence", "present": false, "confidence": "high", "energy": 0, "distance_cm": 0}}
+{"ts": 1790342460, "topic": "hestia/sensor/vs-10/state", "payload": {"version": 1, "sent_ts": 1790342458, "src_id": "vs-10", "seq": 1, "type": "motion", "motion": true, "confidence": "low"}}
+{"ts": 1790342480, "topic": "hestia/sensor/vs-09/state", "payload": {"version": 1, "sent_ts": 1790342478, "src_id": "vs-09", "seq": 1, "type": "bed", "occupied": true}}
+{"ts": 1790342490, "topic": "hestia/sensor/vs-08/state", "payload": {"version": 1, "sent_ts": 1790342488, "src_id": "vs-08", "seq": 1, "type": "presence", "present": true, "confidence": "high", "energy": 18, "distance_cm": 120}}
+{"ts": 1790343100, "topic": "hestia/sensor/vs-08/state", "payload": {"version": 1, "sent_ts": 1790343098, "src_id": "vs-08", "seq": 2, "type": "presence", "present": true, "confidence": "high", "energy": 4, "distance_cm": 115}}
+{"ts": 1790344000, "topic": "hestia/sensor/vs-08/state", "payload": {"version": 1, "sent_ts": 1790343998, "src_id": "vs-08", "seq": 3, "type": "presence", "present": true, "confidence": "high", "energy": 3, "distance_cm": 115}}
+{"ts": 1790352000, "topic": "hestia/sensor/vs-09/state", "payload": {"version": 1, "sent_ts": 1790351998, "src_id": "vs-09", "seq": 2, "type": "bed", "occupied": false}}
+{"ts": 1790352010, "topic": "hestia/sensor/vs-08/state", "payload": {"version": 1, "sent_ts": 1790352008, "src_id": "vs-08", "seq": 4, "type": "presence", "present": true, "confidence": "high", "energy": 40, "distance_cm": 130}}
+{"ts": 1790352030, "topic": "hestia/sensor/vs-10/state", "payload": {"version": 1, "sent_ts": 1790352028, "src_id": "vs-10", "seq": 2, "type": "motion", "motion": true, "confidence": "low"}}
+{"ts": 1790352060, "topic": "hestia/sensor/vs-12/state", "payload": {"version": 1, "sent_ts": 1790352058, "src_id": "vs-12", "seq": 1, "type": "motion", "motion": true, "confidence": "low"}}
+{"ts": 1790352070, "topic": "hestia/sensor/vs-11/state", "payload": {"version": 1, "sent_ts": 1790352068, "src_id": "vs-11", "seq": 1, "type": "presence", "present": true, "confidence": "high", "energy": 35, "distance_cm": 100}}
+{"ts": 1790352300, "topic": "hestia/sensor/vs-11/state", "payload": {"version": 1, "sent_ts": 1790352298, "src_id": "vs-11", "seq": 2, "type": "presence", "present": false, "confidence": "high", "energy": 0, "distance_cm": 0}}
+{"ts": 1790352360, "topic": "hestia/sensor/vs-09/state", "payload": {"version": 1, "sent_ts": 1790352358, "src_id": "vs-09", "seq": 3, "type": "bed", "occupied": true}}
+{"ts": 1790352370, "topic": "hestia/sensor/vs-08/state", "payload": {"version": 1, "sent_ts": 1790352368, "src_id": "vs-08", "seq": 5, "type": "presence", "present": true, "confidence": "high", "energy": 5, "distance_cm": 118}}

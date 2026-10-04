@@ -81,10 +81,11 @@ class ActivityContext(Context):
 class ActivityEvaluator:
     """12종 점수를 계산하고 하나를 고른다."""
 
-    def __init__(self, clock: Clock, config: Config, world: WorldState) -> None:
+    def __init__(self, clock: Clock, config: Config, world: WorldState, models: Any | None = None,) -> None:
         self._clock = clock
         self._config = config
         self._world = world
+        self._models = models
 
     def evaluate(
         self,
@@ -211,6 +212,12 @@ class ActivityEvaluator:
             factors["cooking_off_sec"] = None if off_sec is None else round(off_sec)
             factors["fridge_recent"] = fridge_recent
 
+            # 개인 분포에서 지금이 어디쯤인가.
+            # 분포가 activity 를 움직이고, activity 가 t0 를 만들고, t0 가 분포를 만든다. 되먹임을 막는 장치(낮은 가중치, sample_days 하한, predictability 하한)가 갖춰진 뒤에 켠다.
+            pct = self._percentile("meal_time", now)
+            if pct is not None:
+                factors["meal_time_percentile"] = round(pct, 3)
+
             if cooking:
                 prep = w("MEAL_PREP", "cooking_on") + w("MEAL_PREP", "kitchen_present")
                 if fridge_recent:
@@ -322,6 +329,18 @@ class ActivityEvaluator:
         )
 
     # ------------------------------------------------------------ 보조
+
+    def _percentile(self, dist_name: str, now: float) -> float | None:
+        """개인 분포에서 현재 시각의 백분위. 모델이 없으면 None."""
+        if self._models is None:
+            return None
+        from .model import percentile
+        from .timeutil import minutes_since_midnight
+
+        dist = self._models.distribution(dist_name)
+        if dist is None:
+            return None
+        return percentile(dist, minutes_since_midnight(now))
 
     def _weights(self, state: str, key: str) -> float:
         return float(self._config.value("activity", "weights", state, key, default=0.0))

@@ -761,6 +761,7 @@ class ContextEngine:
         scheduler: Scheduler,
         on_change: Callable[[tuple[Context, ...]], None] | None = None,
         t0log: Any | None = None,
+        models: Any | None = None,
     ) -> None:
         from .activity import ActivityContext, ActivityEvaluator   # 순환 import 회피
         from .fsm import MealFSM, WakeFSM
@@ -771,7 +772,7 @@ class ContextEngine:
         self._presence_eval = PresenceEvaluator(clock, config, world)
         self._away_eval = AwayEvaluator(clock, config, world)
         self._occupancy_eval = OccupancyEvaluator(clock, config, world)
-        self._activity_eval = ActivityEvaluator(clock, config, world)
+        self._activity_eval = ActivityEvaluator(clock, config, world, models)
         self._suppression_eval = SuppressionEvaluator(clock, config)
 
         self.meal_fsm = MealFSM(clock, config, world, t0log)
