@@ -4,6 +4,7 @@ import '../../app/theme.dart';
 import '../../models/context_state.dart';
 import '../../models/device.dart';
 import '../../models/notification_item.dart';
+import '../../models/room.dart';
 
 /// Context Engine 값을 사람이 읽는 문자열로 바꾼다.
 ///
@@ -45,6 +46,22 @@ abstract final class ContextLabels {
 
   static bool isFault(String state) => state == 'SENSOR_FAULT';
 
+  /// 화면에 보일 문장. presence는 state가 없고 area를 보내므로 공간 이름으로 표시한다.
+  static String describe(ContextState s) {
+    final area = s.area;
+    if (s.name == ContextName.presence && area != null) {
+      return '${RoomLabels.name(area)}에 있음';
+    }
+    return state(s.state);
+  }
+
+  static IconData iconOf(ContextState s) {
+    if (s.name == ContextName.presence && s.area != null) {
+      return Icons.person_pin_circle_rounded;
+    }
+    return icon(s.name, s.state);
+  }
+
   static IconData icon(String contextName, String state) {
     switch (state) {
       case 'HOME':
@@ -79,6 +96,9 @@ abstract final class ContextLabels {
 }
 
 abstract final class RoomLabels {
+  /// 공간 id → 이름. 설정 카탈로그에 없으면 id를 그대로 보여준다.
+  static String name(String roomId) => RoomTemplate.byId(roomId)?.name ?? roomId;
+
   static IconData icon(String roomId) => switch (roomId) {
         'living' => Icons.weekend_rounded,
         'bedroom' => Icons.bed_rounded,

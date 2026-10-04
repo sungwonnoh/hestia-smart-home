@@ -106,7 +106,8 @@ class HestiaNotification {
         priority: NotificationPriority.fromWire(json['priority'] as String?),
         title: json['title'] as String,
         message: (json['message'] ?? '') as String,
-        createdAt: DateTime.parse(json['createdAt'] as String),
+        // 서버는 타임존이 붙은 ISO 문자열을 보낸다. 화면은 로컬 시각으로 그린다.
+        createdAt: DateTime.parse(json['createdAt'] as String).toLocal(),
         roomId: json['roomId'] as String?,
         explanationId: json['explanationId'] as String?,
         delivered: json['delivered'] as bool? ?? false,

@@ -91,7 +91,7 @@ class _SystemInfoPageState extends State<SystemInfoPage> {
                   ListTile(
                     title: const Text('데이터 소스'),
                     subtitle: Text(
-                      demo != null ? 'Mock 데이터 (서버 연결 전)' : 'HESTIA API',
+                      demo != null ? 'Mock 데이터' : 'HESTIA API (${AppConfig.apiBaseUrl})',
                     ),
                   ),
                   const ListTile(
