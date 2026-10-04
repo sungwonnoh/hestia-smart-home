@@ -1,0 +1,25 @@
+# 기상 ~ 아침 준비 시나리오 (2026-09-25 KST)
+# ts = recv_ts. payload 안의 sent_ts 는 2초 앞선 값 (네트워크 지연)
+# 센서 배치는 config/homes/demo.toml 기준
+{"ts": 1790271000, "topic": "hestia/node/esp32-1/status", "payload": {"version": 1, "sent_ts": 1790270998, "src_id": "esp32-1", "online": true, "ts_synced": true}}
+{"ts": 1790271005, "topic": "hestia/system/profile", "payload": {"version": 1, "sent_ts": 1790271003, "src_id": "rpi4", "profile": "REAL"}}
+{"ts": 1790271010, "topic": "hestia/device/vd-01/state", "payload": {"version": 1, "sent_ts": 1790271008, "src_id": "vd-01", "seq": 70, "device_type": "smart_tv", "source": "mock", "power": "OFF"}}
+{"ts": 1790272800, "topic": "hestia/sensor/vs-09/state", "payload": {"version": 1, "sent_ts": 1790272798, "src_id": "vs-09", "seq": 331, "type": "bed", "occupied": true}}
+{"ts": 1790272810, "topic": "hestia/sensor/vs-08/state", "payload": {"version": 1, "sent_ts": 1790272808, "src_id": "vs-08", "seq": 4800, "type": "presence", "present": true, "confidence": "high", "energy": 6, "distance_cm": 120}}
+{"ts": 1790294400, "topic": "hestia/sensor/vs-09/state", "payload": {"version": 1, "sent_ts": 1790294398, "src_id": "vs-09", "seq": 332, "type": "bed", "occupied": false}}
+{"ts": 1790294410, "topic": "hestia/sensor/vs-08/state", "payload": {"version": 1, "sent_ts": 1790294408, "src_id": "vs-08", "seq": 4801, "type": "presence", "present": true, "confidence": "high", "energy": 45, "distance_cm": 150}}
+{"ts": 1790294430, "topic": "hestia/sensor/vs-10/state", "payload": {"version": 1, "sent_ts": 1790294428, "src_id": "vs-10", "seq": 112, "type": "motion", "motion": true, "confidence": "low"}}
+{"ts": 1790294460, "topic": "hestia/sensor/vs-08/state", "payload": {"version": 1, "sent_ts": 1790294458, "src_id": "vs-08", "seq": 4802, "type": "presence", "present": false, "confidence": "high", "energy": 0, "distance_cm": 0}}
+{"ts": 1790294520, "topic": "hestia/sensor/vs-12/state", "payload": {"version": 1, "sent_ts": 1790294518, "src_id": "vs-12", "seq": 88, "type": "motion", "motion": true, "confidence": "low"}}
+{"ts": 1790294530, "topic": "hestia/sensor/vs-11/state", "payload": {"version": 1, "sent_ts": 1790294528, "src_id": "vs-11", "seq": 210, "type": "presence", "present": true, "confidence": "high", "energy": 35, "distance_cm": 90}}
+{"ts": 1790294880, "topic": "hestia/sensor/vs-11/state", "payload": {"version": 1, "sent_ts": 1790294878, "src_id": "vs-11", "seq": 211, "type": "presence", "present": false, "confidence": "high", "energy": 0, "distance_cm": 0}}
+{"ts": 1790295000, "topic": "hestia/sensor/vs-05/state", "payload": {"version": 1, "sent_ts": 1790294998, "src_id": "vs-05", "seq": 340, "type": "motion", "motion": true, "confidence": "low"}}
+{"ts": 1790295010, "topic": "hestia/sensor/vs-04/state", "payload": {"version": 1, "sent_ts": 1790295008, "src_id": "vs-04", "seq": 4821, "type": "presence", "present": true, "confidence": "high", "energy": 38, "distance_cm": 210}}
+{"ts": 1790295060, "topic": "hestia/device/vd-06/event", "payload": {"version": 1, "sent_ts": 1790295058, "src_id": "vd-06", "seq": 13, "device_type": "water_purifier", "source": "mock", "event_type": "dispensed", "water_type": "AMBIENT", "amount_ml": 200}}
+{"ts": 1790295300, "topic": "hestia/device/vd-05/event", "payload": {"version": 1, "sent_ts": 1790295298, "src_id": "vd-05", "seq": 206, "device_type": "smart_fridge", "source": "mock", "event_type": "door_opened"}}
+{"ts": 1790295314, "topic": "hestia/device/vd-05/event", "payload": {"version": 1, "sent_ts": 1790295312, "src_id": "vd-05", "seq": 207, "device_type": "smart_fridge", "source": "mock", "event_type": "door_closed", "open_duration_sec": 14}}
+{"ts": 1790295600, "topic": "hestia/sensor/vs-06/state", "payload": {"version": 1, "sent_ts": 1790295598, "src_id": "vs-06", "seq": 204, "type": "power", "watt": 1180}}
+{"ts": 1790295660, "topic": "hestia/sensor/vs-06/state", "payload": {"version": 1, "sent_ts": 1790295658, "src_id": "vs-06", "seq": 205, "type": "power", "watt": 1650}}
+{"ts": 1790296500, "topic": "hestia/sensor/vs-06/state", "payload": {"version": 1, "sent_ts": 1790296498, "src_id": "vs-06", "seq": 206, "type": "power", "watt": 3}}
+{"ts": 1790296800, "topic": "hestia/sensor/vs-04/state", "payload": {"version": 1, "sent_ts": 1790296798, "src_id": "vs-04", "seq": 4822, "type": "presence", "present": true, "confidence": "high", "energy": 12, "distance_cm": 180}}
+{"ts": 1790297100, "topic": "hestia/sensor/vs-04/state", "payload": {"version": 1, "sent_ts": 1790297098, "src_id": "vs-04", "seq": 4823, "type": "presence", "present": true, "confidence": "high", "energy": 9, "distance_cm": 175}}

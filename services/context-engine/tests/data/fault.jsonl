@@ -1,0 +1,8 @@
+# 노드 다운 → SENSOR_FAULT (2026-09-25 15:00 KST 기준)
+# 센서가 죽은 것을 부재로 오인하면 낙상·장기 무활동을 놓친다.
+{"ts": 1790316000, "topic": "hestia/node/esp32-1/status", "payload": {"version": 1, "sent_ts": 1790315998, "src_id": "esp32-1", "online": true, "ts_synced": true}}
+{"ts": 1790316010, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790316008, "src_id": "vs-01", "seq": 1, "type": "presence", "present": true, "confidence": "high", "energy": 45, "distance_cm": 190}}
+{"ts": 1790316300, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790316298, "src_id": "vs-01", "seq": 2, "type": "presence", "present": true, "confidence": "high", "energy": 12, "distance_cm": 188}}
+{"ts": 1790316600, "topic": "hestia/node/esp32-1/status", "payload": {"version": 1, "sent_ts": 1790316598, "src_id": "esp32-1", "online": false, "ts_synced": false}}
+{"ts": 1790317200, "topic": "hestia/node/esp32-1/status", "payload": {"version": 1, "sent_ts": 1790317198, "src_id": "esp32-1", "online": true, "ts_synced": true}}
+{"ts": 1790317210, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790317208, "src_id": "vs-01", "seq": 3, "type": "presence", "present": true, "confidence": "high", "energy": 38, "distance_cm": 190}}

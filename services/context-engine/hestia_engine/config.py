@@ -264,6 +264,14 @@ class Config:
             node = node[key]
         return node
 
+    def publish_interval(self) -> float:
+        """context 주기 발행 간격.
+
+        DEMO 배수를 적용하지 않는다 — 5분이 30초가 되면
+        로그만 지저분해지고 얻는 게 없다.
+        """
+        return float(self.value("publish", "interval_sec", default=300))
+
     # ------------------------------------------------------------ 프로파일
 
     @property

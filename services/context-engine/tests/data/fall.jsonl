@@ -1,0 +1,12 @@
+# 화장실 장시간 정지 — 쓰러짐 후보 (2026-09-25 14:00 KST 기준)
+# present=true 인데 energy 가 계속 바닥. mmWave 가 아니면 못 잡는 상황이다.
+{"ts": 1790312400, "topic": "hestia/node/esp32-1/status", "payload": {"version": 1, "sent_ts": 1790312398, "src_id": "esp32-1", "online": true, "ts_synced": true}}
+{"ts": 1790312410, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790312408, "src_id": "vs-01", "seq": 1, "type": "presence", "present": true, "confidence": "high", "energy": 42, "distance_cm": 200}}
+{"ts": 1790312700, "topic": "hestia/sensor/vs-01/state", "payload": {"version": 1, "sent_ts": 1790312698, "src_id": "vs-01", "seq": 2, "type": "presence", "present": false, "confidence": "high", "energy": 0, "distance_cm": 0}}
+{"ts": 1790312710, "topic": "hestia/sensor/vs-12/state", "payload": {"version": 1, "sent_ts": 1790312708, "src_id": "vs-12", "seq": 1, "type": "motion", "motion": true, "confidence": "low"}}
+{"ts": 1790312720, "topic": "hestia/sensor/vs-11/state", "payload": {"version": 1, "sent_ts": 1790312718, "src_id": "vs-11", "seq": 1, "type": "presence", "present": true, "confidence": "high", "energy": 38, "distance_cm": 110}}
+{"ts": 1790312780, "topic": "hestia/sensor/vs-11/state", "payload": {"version": 1, "sent_ts": 1790312778, "src_id": "vs-11", "seq": 2, "type": "presence", "present": true, "confidence": "high", "energy": 5, "distance_cm": 60}}
+{"ts": 1790313100, "topic": "hestia/sensor/vs-11/state", "payload": {"version": 1, "sent_ts": 1790313098, "src_id": "vs-11", "seq": 3, "type": "presence", "present": true, "confidence": "high", "energy": 3, "distance_cm": 58}}
+{"ts": 1790313400, "topic": "hestia/sensor/vs-11/state", "payload": {"version": 1, "sent_ts": 1790313398, "src_id": "vs-11", "seq": 4, "type": "presence", "present": true, "confidence": "high", "energy": 4, "distance_cm": 59}}
+{"ts": 1790313700, "topic": "hestia/sensor/vs-11/state", "payload": {"version": 1, "sent_ts": 1790313698, "src_id": "vs-11", "seq": 5, "type": "presence", "present": true, "confidence": "high", "energy": 2, "distance_cm": 58}}
+{"ts": 1790314000, "topic": "hestia/sensor/vs-11/state", "payload": {"version": 1, "sent_ts": 1790313998, "src_id": "vs-11", "seq": 6, "type": "presence", "present": true, "confidence": "high", "energy": 3, "distance_cm": 58}}

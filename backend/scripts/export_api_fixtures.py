@@ -1,6 +1,6 @@
 """Flutter 계약 테스트용 API 응답 fixture 생성.
 
-브로커 없이 FastAPI 를 띄우고 mock_mqtt 시나리오를 그대로 넣은 뒤,
+브로커 없이 FastAPI 를 띄우고 mock_mqtt 의 full 시나리오(가전 + context + 알림)를 넣은 뒤,
 Flutter ApiHestiaRepository 가 호출하는 응답을 JSON 파일로 저장한다.
 Flutter 는 손으로 쓴 JSON 대신 이 파일로 파싱을 검증한다.
 
@@ -79,7 +79,7 @@ def collect() -> dict[str, Any]:
         client.put(api + "/setup", json=setup).raise_for_status()
 
         ingest = app.state.hestia.ingest
-        for topic, payload, _retain in scenario():
+        for topic, payload, _retain in scenario("full"):
             if not ingest.handle(topic, json.dumps(payload, ensure_ascii=False)):
                 raise RuntimeError(f"시나리오 메시지가 버려졌다: {topic}")
 

@@ -58,6 +58,27 @@ area_switch_min_sec = 20          # 구역 전환 최소 지속 (오가는 떨�
 still_max = 10                    # 이 이하면 정지
 active_min = 30                   # 이 이상이면 활동 중
 
+# 근거별 확신도.
+#
+# **아래 값은 전부 임시값이다.** 순서(mmWave > 압력패드 > PIR)만 센서 원리에서
+# 나온 것이고 — mmWave 는 정지한 사람도 감지하고 PIR 은 놓친다 —
+# 절대값은 근거가 없다.
+# B-9~B-13 벤치 측정(센서별 오탐·미탐률) 후 재설정하고,
+# Replay 스윕(H-5)으로 조합을 튜닝한다.
+#
+# method: 근거가 여럿일 때 합치는 방식.
+#   max      — 가장 강한 근거 하나를 쓴다 (현재)
+#   noisy_or — 1 - Π(1-p). 근거가 쌓이면 올라간다.
+#              센서별 오탐률(p)을 측정한 뒤에야 의미가 있다.
+[presence.confidence]
+method = "max"
+mmwave_active = 0.95              # present + energy >= active_min
+mmwave_still = 0.85               # present + energy < active_min
+bed = 0.80                        # 압력 패드 점유
+pir_recent = 0.60                 # PIR motion, timeout 이내
+pir_stale = 0.35                  # PIR 반응이 오래됨
+runner_up_penalty = 0.5           # user_area 선택 시 2등과의 격차 반영 계수
+
 # 화장실 쓰러짐 후보 — present=true 인데 energy 가 계속 바닥
 [presence.fall_watch]
 enabled = true
@@ -66,10 +87,64 @@ still_duration_sec = 600          # 10분간 정지 상태 지속
 escalate_after_sec = 1800         # 30분이면 SAFETY 시나리오
 
 
+# ============================================================ 부재 판정
+#
+# 명세의 context/away. HOME / AWAY / UNKNOWN / SENSOR_FAULT.
+#
+# AWAY 와 UNKNOWN 을 나누는 것은 '현관 이벤트가 있었나'다.
+# 문이 열렸다 닫히고 전 구역이 조용하면 나간 것이고,
+# 문은 안 열렸는데 조용하면 자고 있을 수도 쓰러졌을 수도 있다.
+# 성급히 AWAY 로 가면 안전 시나리오가 전부 억제된다.
+
+[away]
+door_exit_quiet_sec = 600         # 현관 개폐 후 전 구역 무반응 지속 → AWAY
+door_exit_window_sec = 1800       # 이 안에 현관 이벤트가 있었어야 door_exit 근거
+no_motion_unknown_sec = 3600      # 현관 이벤트 없이 무반응 → UNKNOWN
+
+
+# ============================================================ 인원 판정
+#
+# 명세는 근거를 셋 들지만 현재 배치로 쓸 수 있는 것은 하나뿐이다.
+#   두 구역 동시 재실     ✅
+#   mmWave targets 다중   ❌ 페이로드에 필드 없음 (LD2450 필요)
+#   도어벨 ring 이후 증가  ❌ 도어벨 미배치
+#
+# MULTI 판정의 대가가 크다 — 개인 Baseline 학습 중단, 개인화 알림 중단.
+# 오탐이 나면 프로젝트의 차별점이 조용히 꺼진다. 보수적으로 간다.
+
+[occupancy]
+multi_min_sec = 120               # 두 구역 동시 재실이 이만큼 지속돼야 MULTI
+multi_min_confidence = 0.80       # 두 구역 모두 이 이상의 확신도여야 함
+single_restore_sec = 300          # MULTI 해제 후 SINGLE 복귀까지
+
+
+# ============================================================ 억제
+#
+# 명세의 context/suppression. 다른 context 와 성격이 다르다 —
+# 센서를 읽어 세상을 추론하는 것이 아니라 엔진 자기 상태다.
+# 실제 억제는 알림 코드가 메모리에서 직접 확인하고,
+# 발행은 대시보드 가시성과 재시작 복원용이다.
+#
+# 우선순위: SLEEP_PROBE > AWAY > MULTI > COOLDOWN
+# 안전 시나리오는 어떤 억제도 뚫는다.
+
+[suppression]
+cooldown_sec = 1800               # 직전 알림 후 연속 발송 방지
+always_except = ["SAFETY"]        # 억제를 뚫는 시나리오
+
+
 # ============================================================ activity 판정
 #
-# 15종 상태의 점수 계산 파라미터.
-# 실제 가중치는 2단계에서 규칙을 만들며 채운다. 지금은 공통 항목만.
+# 12종 상태에 각각 점수를 매기고 가장 높은 것을 고른다.
+# if-else 사슬을 쓰지 않는 이유: 조건 순서가 결과를 바꾸고,
+# 상태를 하나 추가할 때마다 전체를 다시 봐야 한다.
+#
+# 가중치 합을 1.0 으로 맞추지 않는다. 하나를 바꿀 때 나머지를 다 조정해야 하고,
+# Replay 스윕에서 축이 하나가 아니라 여럿이 된다.
+# confidence 는 전체 합 대비 비율로 구한다.
+#
+# **값은 전부 임시값이다.** 근거가 강한 순서만 뜻이 있다.
+# 벤치 측정과 Replay 스윕으로 확정한다.
 
 [activity]
 min_score = 0.35                  # 이 미만이면 UNKNOWN (open-set)
@@ -77,7 +152,6 @@ hysteresis_bonus = 0.10           # 현재 상태 유지에 주는 가산점
 min_hold_sec = 60                 # 상태 최소 지속
 
 [activity.meal]
-# EATING 판정 — 명세: 조리기구 전력 종료 후 구역 체류 지속이 주 신호
 prep_to_eating_gap_sec = 180      # 조리 종료 후 이만큼 지나면 EATING 후보
 eating_min_dwell_sec = 300        # 최소 체류
 fridge_recent_window_sec = 900    # 냉장고 접근을 "최근"으로 볼 창
@@ -86,12 +160,96 @@ session_timeout_sec = 7200        # FSM 강제 종료 (2시간)
 [activity.sleep]
 tv_idle_for_sleep_sec = 7200      # TV 무조작 2시간 — 수면 판단의 핵심 신호
 bed_confirm_sec = 600             # 압력 패드 점유 지속
+still_for_sleep_sec = 600         # energy 바닥이 이만큼 지속돼야 SLEEPING
 wake_confirm_sec = 300            # 이탈 후 이만큼 활동하면 기상 확정
+night_start_hour = 21             # 야간으로 보는 시간대
+night_end_hour = 7
 
-[activity.away]
-door_exit_quiet_sec = 600         # 현관 개폐 후 전 구역 무반응 지속 → AWAY
-no_motion_unknown_sec = 3600      # 현관 이벤트 없이 무반응 → UNKNOWN
+# 상태별 근거 가중치. 합산해 점수를 만든다.
+# IN_BED_AWAKE 를 기본으로 두고 확신이 쌓일 때 SLEEPING 으로 간다 —
+# 깨어 있는 사람의 조명을 끄는 쪽이 실수 비용이 크다.
 
+[activity.weights.SLEEPING]
+bed_occupied = 0.35
+still_sustained = 0.30
+tv_idle = 0.15
+night_hours = 0.20
+
+[activity.weights.IN_BED_AWAKE]
+bed_occupied = 0.40
+moving = 0.25
+not_night = 0.15
+
+[activity.weights.WAKING]
+bed_left_recent = 0.45
+bedroom_motion = 0.20
+morning_hours = 0.15
+
+[activity.weights.MEAL_PREP]
+cooking_on = 0.60
+kitchen_present = 0.25
+fridge_recent = 0.10
+
+[activity.weights.EATING]
+cooking_off_recent = 0.35
+kitchen_dwell = 0.30
+low_energy = 0.15
+fridge_recent = 0.10
+
+[activity.weights.KITCHEN_MISC]
+kitchen_present = 0.40
+
+[activity.weights.BATHROOM]
+bathroom_present = 0.85
+
+[activity.weights.WATCHING_TV]
+tv_on = 0.45
+living_present = 0.25
+remote_recent = 0.15
+
+[activity.weights.RESTING]
+living_present = 0.30
+bed_occupied = 0.25
+tv_off = 0.15
+
+[activity.weights.LAUNDRY]
+washer_running = 0.50
+utility_motion = 0.25
+
+# 개인 분포를 activity 점수에 반영하는 가중치.
+#
+# 0 이면 factors 에 표시만 하고 점수는 건드리지 않는다. 켜려면 셋이 선행돼야
+# 한다 — 분포가 판정을 뒤집지 못할 만큼 낮은 값, sample_days 하한,
+# predictability 하한. 되먹임(분포 -> activity -> t0 -> 분포)을 막기 위해서다.
+[activity.baseline]
+percentile_weight = 0.0
+min_sample_days = 14
+min_predictability = 0.12
+
+# ============================================================ 활동 묶음 (FSM)
+#
+# activity 는 기억이 없다 — 매 순간 센서를 보고 다시 계산한다.
+# FSM 은 "09:20 에 시작된 것이 지금도 진행 중"을 기억하고 t0 를 보관한다.
+#
+# t0 는 활동 묶음의 시작이다. MEAL_PREP -> EATING 전이에도 유지된다.
+# KDE 가 학습하는 것은 '식사를 시작한 시각'이고 그것은 조리를 시작한 때다.
+
+[fsm.meal]
+open_states = ["MEAL_PREP", "EATING"]   # KITCHEN_MISC 는 열지 않는다 (물 마시러 들른 것)
+close_grace_sec = 600                   # 묶음 상태를 벗어난 뒤 이만큼 지나면 닫는다
+min_duration_sec = 120                  # 이보다 짧으면 기록하지 않는다
+session_timeout_sec = 7200              # 강제 종료 (2시간)
+
+[fsm.wake]
+# activity 는 '지금'이고 wake 는 '오늘 하루의 누적'이다. 시간 스케일이 달라
+# 별도로 유지한다. 다음 기상 확정 시 리셋한다.
+sleep_confirm_sec = 600                 # SLEEPING 이 이만큼 지속돼야 ASLEEP 확정
+wake_confirm_sec = 300                  # 기상 후 이만큼 활동하면 AWAKE 확정
+hydration_window_sec = 7200             # 기상 후 이 안의 급수를 루틴으로 본다
+meal_window_sec = 10800                 # 기상 후 이 안의 식사를 루틴으로 본다
+# 기상으로 인정하는 시간대. 새벽 화장실과 아침 기상은 센서 신호가 같다.
+earliest_hour = 4
+latest_hour = 12
 
 # ============================================================ 이상 판정
 #
@@ -177,3 +335,12 @@ window_sec = 900
 cooldown_scale = 0.1
 timeout_scale = 0.1
 observe_scale = 0.1
+
+
+# ============================================================ 발행
+#
+# 명세: 상태 변화 시 즉시 + 5분 주기(생존 확인)
+# 주기 발행은 DEMO 배수를 적용하지 않는다.
+
+[publish]
+interval_sec = 300

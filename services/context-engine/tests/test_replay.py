@@ -12,44 +12,55 @@ DATA = Path(__file__).parent / "data" / "morning.jsonl"
 
 
 def run(path=DATA):
-    return replay_file(path, echo=False)
+    result, engine, pub, t0log = replay_file(path, echo=False)
+    return result, engine
 
+def run_echo(path=DATA):
+    """메시지 자체를 확인하는 테스트용 — EchoSink 로 재생한다.
+
+    Engine 은 메시지를 보관하지 않고 카운터만 센다.
+    """
+    clock = ReplayClock(0)
+    sched = Scheduler(clock)
+    sink = EchoSink(clock, echo=False)
+    result = Replay(clock, sched, sink).run(path)
+    return result, sink
 
 # ============================================================ 기본 동작
 
 
 def test_all_lines_ingested():
-    result, sink = run()
-    assert result.lines == 14
-    assert sink.dropped == 0
-    assert len(sink.received) == 14
+    result, engine = run()
+    assert result.lines == 22
+    assert engine.dropped == 0
+    assert engine.received == 22
 
 
 def test_comments_and_blanks_skipped():
     lines = list(read_jsonl(DATA))
-    assert len(lines) == 14          # 주석 2줄은 제외됨
+    assert len(lines) == 22
 
 
 def test_clock_follows_recv_ts():
     """마지막 줄 처리 시점의 시계가 그 줄의 ts 여야 한다."""
-    _, sink = run()
-    assert sink.received[-1].recv_ts == 1790296800.0
+    _, sink = run_echo()
+    assert sink.received[-1].recv_ts == 1790297100.0
 
 
 def test_recv_ts_differs_from_sent_ts():
     """네트워크 지연이 보존된다. sent_ts 는 판단에 쓰지 않는다."""
-    _, sink = run()
+    _, sink = run_echo()
     msg = sink.received[-1]
     assert msg.recv_ts - msg.sent_ts == 2.0
 
 
 def test_span_covers_seven_hours():
     result, _ = run()
-    assert result.span_sec == 1790296800 - 1790271000
+    assert result.span_sec == 1790297100 - 1790271000
 
 
 def test_order_preserved():
-    _, sink = run()
+    _, sink = run_echo()
     ts = [m.recv_ts for m in sink.received]
     assert ts == sorted(ts)
 
@@ -59,9 +70,9 @@ def test_order_preserved():
 
 def test_same_input_same_output():
     """0단계 게이트 — 같은 JSONL 을 두 번 재생하면 출력이 완전히 동일하다."""
-    _, a = run()
-    _, b = run()
-    assert a.received == b.received
+    _, _, a, _ = replay_file(DATA, echo=False)
+    _, _, b, _ = replay_file(DATA, echo=False)
+    assert a.published == b.published
 
 
 def test_no_wall_clock_dependency():
