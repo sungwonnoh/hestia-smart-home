@@ -278,10 +278,13 @@ predictability_min = 0.05
 # 알림 층을 만들 때 채운다. 지금은 골격만.
 
 [notify.default]
-requires_ack = false              # 명세: 기본 false, 이벤트로 판정 불가할 때만 true
+requires_ack = false
 ack_deadline_sec = 600
 cooldown_sec = 1800
 comply_window_min = 30
+expiry_sec = 3600                 # 이 시각이 지나면 보내지 않는다 (명세의 expiry)
+max_escalation = 2                # 명세: 최대 2단계. SAFETY 만 예외
+affinity = ["smart_tv", "smart_fridge"]   # default 에도 필요 — 시나리오가 생략할 수 있음
 
 [notify.WAKE_ROUTINE]
 affinity = ["smart_fridge", "smart_tv"]
@@ -293,10 +296,11 @@ requires_ack = true               # 복약은 이벤트로 판정 불가
 comply_window_min = 60
 
 [notify.SAFETY]
-affinity = ["smart_tv", "smart_light"]
+affinity = ["smart_tv", "smart_light", "voice"]
 requires_ack = true
 ack_deadline_sec = 120
-cooldown_sec = 0                  # 안전은 쿨다운 없음
+cooldown_sec = 0
+max_escalation = 0                # 0 = 무제한. ack 수신까지 지속
 
 
 # ============================================================ 총량 제한

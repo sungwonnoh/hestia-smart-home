@@ -388,6 +388,52 @@ def test_wake_payload_shape(c):
         "medication_done", "medication_prompted",
     }
 
+def test_done_at_records_time(c):
+    """_done 플래그만으로는 언제 했는지 모른다 — outcome 의 delay_sec 에 필요."""
+    c.bed("vs-09", True)
+    c.at(MORNING + 100).bed("vs-09", False)
+    c.at(MORNING + 110).presence("vs-11", True)
+    c.at(MORNING + 200).tick()
+
+    c.at(MORNING + 400).dispensed()
+    assert c.wake.hydration_at == MORNING + 400
+    assert c.engine.wake_fsm.done_at("hydration") == MORNING + 400
+
+
+def test_done_at_none_before(c):
+    c.bed("vs-09", True)
+    c.at(MORNING + 100).bed("vs-09", False)
+    c.at(MORNING + 110).presence("vs-11", True)
+    c.at(MORNING + 200).tick()
+    assert c.engine.wake_fsm.done_at("hydration") is None
+
+
+def test_done_at_not_published(c):
+    """명세의 wake 페이로드에 없는 내부 값이다."""
+    p = c.engine.wake_fsm.state.payload(c.clock.now())
+    assert "hydration_at" not in p
+    assert len(p) == 8
+
+
+def test_done_at_resets(c):
+    """다음 수면에 플래그와 함께 비워진다."""
+    c.bed("vs-09", True)
+    c.at(MORNING + 100).bed("vs-09", False)
+    c.at(MORNING + 110).presence("vs-11", True)
+    c.at(MORNING + 200).tick()
+    c.at(MORNING + 400).dispensed()
+    assert c.wake.hydration_at is not None
+
+    night_at = MORNING + 48000
+    c.at(night_at).presence("vs-11", False)
+    c.at(night_at + 100).bed("vs-09", True)
+    c.at(night_at + 110).presence("vs-08", True, energy=5)
+    c.at(night_at + 800).tick()
+    c.at(night_at + 1500).tick()
+
+    assert c.wake.state == "ASLEEP"
+    assert c.wake.hydration_at is None
+
 
 # ============================================================ 실제 시나리오
 

@@ -267,10 +267,14 @@ class WakeState(Context):
     wake_t0: float | None = None       # 침대를 떠난 시각. KDE 기상 분포의 입력
     hydration_done: bool = False
     hydration_prompted: bool = False
+    hydration_at: float | None = None
     meal_done: bool = False
     meal_prompted: bool = False
+    meal_at: float | None = None
     medication_done: bool = False
     medication_prompted: bool = False
+    medication_at: float | None = None
+    #_at은 발행하지 않음, 알림 층이 메모리에서 읽는 값
 
     def payload(self, now: float) -> dict[str, Any]:
         return {
@@ -361,7 +365,11 @@ class WakeFSM:
             return
         if not self._within("hydration_window_sec"):
             return
-        self.state = _replace(self.state, hydration_done=True, hydration_prompted=prompted)
+        now = self._clock.now()
+        self.state = _replace(
+            self.state, 
+            hydration_done=True, hydration_prompted=prompted, hydration_at=now,
+            )
         self._log_entry("hydration", prompted)
 
     def note_meal(self, prompted: bool = False) -> None:
@@ -369,15 +377,28 @@ class WakeFSM:
             return
         if not self._within("meal_window_sec"):
             return
-        self.state = _replace(self.state, meal_done=True, meal_prompted=prompted)
+        self.state = _replace(
+            self.state, 
+            meal_done=True, meal_prompted=prompted, meal_at=self._clock.now(),
+            )
 
     def note_medication(self, prompted: bool = False) -> None:
         """복약은 이벤트로 판정할 수 없다 — ack 로만 확인한다 (명세)."""
         if self.state.state != "AWAKE" or self.state.medication_done:
             return
-        self.state = _replace(self.state, medication_done=True, medication_prompted=prompted)
+        self.state = _replace(
+            self.state, 
+            medication_done=True, medication_prompted=prompted, medication_at=self._clock.now(),
+            )
 
     # ------------------------------------------------------------ 내부
+
+    def done_at(self, kind: str) -> float | None:
+        """그 루틴을 마친 시각. 알림 층의 comply 판정에 쓴다.
+
+        _done 플래그만으로는 셋을 구별할 수 없다 — 알림 전에 이미 했는지, 언제 했는지(delay_sec), 리셋으로 false 가 됐는지.
+        """
+        return getattr(self.state, f"{kind}_at", None)
 
     def _is_wake_hour(self) -> bool:
         """기상으로 인정하는 시간대.
