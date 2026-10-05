@@ -92,13 +92,11 @@ class NotificationService:
         """새 알림이면 저장하고 돌려준다. 이미 받은 알림이면 None."""
         priority = p.priority.lower() if p.priority.lower() in PRIORITIES else "normal"
         room_id = channel_room(p.channels, self._area_of)
-        if p.channels and room_id is None:
-            log.info("알림 공간을 찾지 못함: %s channels=%s", p.notify_id, p.channels)
-
-        explanation_id = None
-        if p.context:
-            open_id = self._history.open_context_id(p.context)
-            explanation_id = str(open_id) if open_id is not None else None
+        devices = [c for c in p.channels if c != VOICE_CHANNEL]
+        if devices and room_id is None:
+            # 앱 설정으로 대신 찾지 않는다. registry 가 정본이다.
+            log.warning("registry 에서 알림 공간을 찾지 못함: %s channels=%s",
+                        p.notify_id, devices)
 
         record = NotificationRecord(
             id=p.notify_id,
@@ -108,7 +106,8 @@ class NotificationService:
             title=p.payload.title or p.payload.text or p.scenario or "HESTIA 알림",
             message=p.payload.text or "",
             room_id=room_id,
-            explanation_id=explanation_id,
+            # decision_id ↔ notify_id 연결 방식 확인 전까지 비워 둔다.
+            explanation_id=None,
             created_at=float(p.sent_ts),
         )
         return record if self._history.add_notification(record, raw) else None

@@ -88,8 +88,6 @@ def engine_messages() -> List[Message]:
                 "title": "식사 후 복약 시간입니다.",
                 "text": "HESTIA가 식사 완료를 감지했습니다.\n복약 시간을 확인해주세요.",
             },
-            # Backend 확장: 판단 근거(explanationId) 연결용
-            context="activity",
         ), False),
     ]
 

@@ -105,8 +105,8 @@ def collect() -> dict[str, Any]:
         out["context_current"] = get("/context/current")
         out["notifications"] = notifications
         out["explanations_latest"] = get("/explanations/latest")
-        explanation_id = next(n["explanationId"] for n in notifications if n.get("explanationId"))
-        out["explanation_by_id"] = get(f"/explanations/{explanation_id}")
+        # 알림 explanationId 는 decision_id 연결 확정 전까지 null 이다. 판단 id 로 직접 조회한다.
+        out["explanation_by_id"] = get(f"/explanations/{out['explanations_latest']['id']}")
         out["preferences"] = get("/preferences")
 
         ack = client.post(f"{api}/notifications/{notifications[0]['id']}/ack",

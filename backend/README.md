@@ -93,6 +93,11 @@ MQTT 원본 스키마는 바꾸지 않고 Backend 에서 Flutter DTO 로 바꾼�
 `channels` 는 공간이 아니라 발송 대상 virtual_id 목록이다. 앞에서부터 `hestia/registry/devices` 의
 `area` 를 찾은 첫 채널을 `roomId` 로 쓴다. `voice` (RPi4 TTS) 는 건너뛴다.
 찾지 못하면 (voice 만 있음, registry 수신 전, 미등록 장치) 오류 없이 `roomId = null` 이다.
+registry 가 정본이므로 앱 설정의 가전 공간으로 대신 채우지 않는다. 장치 채널이 있는데 공간을 못 찾으면 warning 로그를 남긴다.
+area 와 앱 room id 는 같은 내부 ID 체계라 별도 변환 표 없이 그대로 쓴다.
+
+`requires_ack`, `ack_deadline`, `escalation_level` 은 검증 후 원본 payload(`notifications.payload_json`)에만 보존하고 DTO 에는 넣지 않는다.
+최상위 `title`/`message`/`area`/`type` 같은 옛 형식은 지원하지 않는다.
 
 ```json
 // MQTT
@@ -118,9 +123,22 @@ DELIVERED 는 채널에 표시됨, SEEN 은 사용자가 실제로 확인함이�
 
 ### 알림 ↔ 판단 근거 연결
 
-`explanationId` 는 MQTT 필드가 아니라 Backend 개념이다. `hestia/notify/push` 에
-Backend 확장 필드 `context` (예: `"activity"`) 가 있으면 그 context 의 현재 판단과 알림을 연결한다.
-없으면 `explanationId = null` 이다.
+`explanationId` 는 MQTT 필드가 아니라 Backend 개념이다. 판단 식별자는 Context Engine 의
+`decision_id` 를 쓰는 방향이지만, `decision_id` ↔ 후속 `notify_id` 를 엔진이 어떻게 전달·보존하는지
+확인되지 않아 **지금은 연결하지 않는다** (`explanationId = null`, 판단 근거의 `action = null`).
+scenario 나 명세 밖 필드로 추정하지 않는다. Flutter 는 `explanationId` 가 null 이면 최신 판단 근거를 연다.
+
+### 책임 범위
+
+Backend 는 Context Engine 이 발행한 context/notify 를 변환·저장·전달만 한다.
+`SENSOR_FAULT` 같은 판단으로 알림을 새로 만들지 않는다 (알림 생성은 엔진 책임).
+
+### 확인 필요
+
+- `decision_id` ↔ `notify_id` 연결 방식 (위 참고)
+- Context Engine 이 `SENSOR_FAULT` 를 `notify/push` 로 발행하는지
+- 앱 ↔ `hestia/registry/devices` 동기화의 발행 주체: registry 는 RPi4 가 retained 로 발행하고
+  엔진은 수신 시 매핑 전체를 교체한다. FastAPI 출력 토픽(명세 17-A.4)에는 없으므로 정해질 때까지 발행하지 않는다.
 
 ## MQTT 구독 토픽
 

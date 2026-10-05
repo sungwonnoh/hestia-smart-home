@@ -1,5 +1,6 @@
 """hestia/notify/push · ack → Backend Notification DTO 변환 (명세 17-A.8)."""
 
+import logging
 from datetime import datetime
 
 import pytest
@@ -61,6 +62,13 @@ def test_unknown_scenario_falls_back_safely(hestia):
     assert scenario_type("", "normal") == "INFO"
 
 
+def test_explanation_id_is_not_guessed(hestia):
+    """decision_id ↔ notify_id 연결이 확정되기 전에는 명세 밖 필드로 추정하지 않는다."""
+    hestia.receive("hestia/context/activity", envelope("rpi5", state="MEAL_DONE"))
+    n = receive_one(hestia, context="activity")
+    assert n["explanationId"] is None
+
+
 def test_mqtt_type_field_is_not_used(hestia):
     """type 은 MQTT 필드가 아니다. 들어와도 scenario 로만 정한다."""
     n = receive_one(hestia, scenario="SLEEP_ROUTINE", type="SAFETY")
@@ -118,6 +126,28 @@ def test_unregistered_channel_has_no_room_and_does_not_fail(hestia):
     n = receive_one(hestia, channels=["vd-99"])  # registry 수신 전 / 미등록
     assert n["roomId"] is None
     assert receive_one(hestia, notify_id="n-2", channels=[])["roomId"] is None
+
+
+def test_registry_miss_is_logged_but_voice_only_is_not(hestia, caplog):
+    with caplog.at_level(logging.WARNING, logger="app.services.notification_service"):
+        receive_one(hestia, channels=["vd-99", "voice"])
+    assert "vd-99" in caplog.text
+
+    caplog.clear()
+    hestia.receive("hestia/registry/devices", REGISTRY)
+    with caplog.at_level(logging.WARNING, logger="app.services.notification_service"):
+        receive_one(hestia, notify_id="n-voice", channels=["voice"])
+    assert caplog.text == ""
+
+
+def test_room_is_not_taken_from_app_setup(hestia):
+    """registry 가 없으면 앱 설정의 가전 공간으로 대신 채우지 않는다."""
+    hestia.put("/setup", json={
+        "rooms": [{"id": "kitchen", "name": "주방"}],
+        "devices": [{"id": "refrigerator-01", "name": "냉장고", "type": "REFRIGERATOR",
+                     "roomId": "kitchen", "virtualId": "vd-05"}],
+    })
+    assert receive_one(hestia, channels=["vd-05"])["roomId"] is None
 
 
 def test_channel_room_takes_first_resolvable_channel():

@@ -40,6 +40,8 @@ class NotifyPushPayload(MqttEnvelope):
 
     필수는 notify_id 뿐이다. 나머지는 없어도 화면에 보일 수 있게 기본값을 둔다.
     type 은 MQTT 필드가 아니다. Backend 가 scenario 로 만든다.
+    판단 근거(explanationId)와의 연결은 Context Engine decision_id ↔ notify_id 전달 방식이
+    확정될 때까지 하지 않는다. 명세 밖 필드로 추정하지 않는다.
     """
 
     notify_id: str
@@ -51,9 +53,6 @@ class NotifyPushPayload(MqttEnvelope):
     ack_deadline: Optional[Number] = None
     escalation_level: Optional[int] = None
     payload: NotifyContent = NotifyContent()
-    # MQTT 명세 밖의 Backend 확장: 이 알림을 만든 context 이름 (예: activity).
-    # 있으면 판단 근거(explanationId)와 연결한다.
-    context: Optional[str] = None
 
 
 class NotifyAckPayload(MqttEnvelope):

@@ -125,7 +125,7 @@ def test_explanations(hestia):
         factors={"area": "kitchen", "presence": True}))
     hestia.receive("hestia/notify/push", envelope(
         "rpi5", notify_id="n-001", scenario="MEDICATION_PROMPT",
-        payload={"title": "복약 시간입니다"}, context="activity"))
+        payload={"title": "복약 시간입니다"}))
 
     latest = hestia.get("/explanations/latest").json()
     assert latest["contextName"] == "activity"
@@ -133,13 +133,12 @@ def test_explanations(hestia):
     assert latest["confidence"] == 0.87
     assert latest["factors"][0] == {"key": "area", "value": "kitchen",
                                     "label": "주방 재실 감지", "satisfied": True}
-    assert latest["action"] == "'복약 시간입니다' 알림을 보냈습니다."
-
-    # 알림에서 판단으로 이동
-    n = hestia.get("/notifications").json()[0]
-    assert n["explanationId"] == latest["id"]
-    assert hestia.get(f"/explanations/{n['explanationId']}").json()["id"] == latest["id"]
+    assert hestia.get(f"/explanations/{latest['id']}").json()["id"] == latest["id"]
     assert hestia.get("/explanations/999").status_code == 404
+
+    # decision_id ↔ notify_id 연결 확정 전까지 알림과 판단을 잇지 않는다
+    assert hestia.get("/notifications").json()[0]["explanationId"] is None
+    assert latest["action"] is None
     assert len(hestia.get("/explanations").json()) == 1
 
 
