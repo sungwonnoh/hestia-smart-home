@@ -55,6 +55,17 @@ std::string sensorStateTopic(const char* virtual_id){
     return t;
 }
 
+std::string deviceStateTopic(const char* virtual_id){
+    std::string t = "hestia/device/";
+    t += virtual_id;
+    t += "/state";
+    return t;
+}
+
+std::string notifyAckTopic(){
+    return "hestia/notify/ack";
+}
+
 std::string buildPresence(const char* src_id, uint32_t seq, uint32_t sent_ts, 
     bool present, uint8_t energy, uint16_t distance_cm){
         JsonDocument doc;
@@ -151,6 +162,26 @@ std::string buildClimate(const char* src_id, uint32_t seq, uint32_t sent_ts,
     return out;
 }
 
+std::string buildDisplayState(const char* src_id, uint32_t seq, uint32_t sent_ts,
+                              const char* display,
+                              const char* notify_id) {
+    JsonDocument doc;
+    putEnvelope(doc, src_id, seq, sent_ts);
+
+    doc["device_type"] = "display_node";
+    doc["source"]      = "esp32";
+    doc["power"]       = "ON";
+    doc["display"]     = display;
+
+    if (notify_id != nullptr && notify_id[0] != '\0') {
+        doc["notify_id"] = notify_id;
+    }
+
+    std::string out;
+    serializeJson(doc, out);
+    return out;
+}
+
 //SeqCounter 클래스 함수
 SeqCounter::SeqCounter() : count_(0) { }
 
@@ -204,6 +235,17 @@ std::string nodeAnnounceTopic(const char* node_id){
     return t;
 }
 
+
+//노드(esp32) announce
+Emulated sensorEmulated(const char* virtual_id, SensorType type) {
+    return Emulated{ virtual_id, false, typeName(type) };
+}
+
+Emulated deviceEmulated(const char* virtual_id, const char* device_type) {
+    return Emulated{ virtual_id, true, device_type };
+}
+
+
 //노드(esp32) announce
 std::string buildAnnounce(const char* node_id, uint32_t seq, uint32_t sent_ts,
                           const char* fw,
@@ -216,9 +258,71 @@ std::string buildAnnounce(const char* node_id, uint32_t seq, uint32_t sent_ts,
     for (uint8_t i = 0; i < count; i++){
         JsonObject item = arr.add<JsonObject>();
         item["virtual_id"] = items[i].virtual_id;
-        item["type"]       = typeName(items[i].type);
-        item["source"]     = "esp32";
+        if (items[i].is_device) {
+            item["device_type"] = items[i].type_name;
+        } else {
+            item["type"] = items[i].type_name;
+        }
+        item["source"] = "esp32";
     }
+
+    std::string out;
+    serializeJson(doc, out);
+    return out;
+}
+
+
+// ── 알림 수신·확인 ───────────────────────────
+const char* const ACK_DELIVERED = "DELIVERED";
+const char* const ACK_SEEN      = "SEEN";
+
+static void copyField(char* dst, size_t cap, const char* src) {
+    if (src == nullptr) { dst[0] = '\0'; return; }
+    strncpy(dst, src, cap - 1);
+    dst[cap - 1] = '\0';
+}
+
+bool isForMe(const JsonDocument& doc, const char* my_virtual_id) {
+    if (my_virtual_id == nullptr) return false;
+
+    JsonArrayConst arr = doc["channels"].as<JsonArrayConst>();
+    if (arr.isNull()) return false;
+
+    for (JsonVariantConst v : arr) {
+        const char* s = v.as<const char*>();
+        if (s != nullptr && strcmp(s, my_virtual_id) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+NotifyPush parseNotifyPush(const JsonDocument& doc) {
+    NotifyPush p{};              // 전 필드를 0으로
+    p.valid = false;
+
+    copyField(p.notify_id, sizeof(p.notify_id), doc["notify_id"] | "");
+    if (p.notify_id[0] == '\0') {
+        return p;                // ack·cancel 을 짝지을 수 없다
+    }
+
+    copyField(p.title,    sizeof(p.title),    doc["payload"]["title"] | "");
+    copyField(p.text,     sizeof(p.text),     doc["payload"]["text"]  | "");
+    copyField(p.priority, sizeof(p.priority), doc["priority"]         | "normal");
+    copyField(p.scenario, sizeof(p.scenario), doc["scenario"]         | "");
+
+    p.requires_ack = doc["requires_ack"] | false;
+    p.valid = true;
+    return p;
+}
+
+std::string buildNotifyAck(const char* src_id, uint32_t seq, uint32_t sent_ts,
+                           const char* notify_id, const char* ack_type) {
+    JsonDocument doc;
+    putEnvelope(doc, src_id, seq, sent_ts);
+
+    doc["notify_id"] = notify_id;
+    doc["ack_type"]  = ack_type;
 
     std::string out;
     serializeJson(doc, out);
