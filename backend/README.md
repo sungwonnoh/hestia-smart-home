@@ -66,15 +66,66 @@ Flutter 가전(`tv-01`)과 MQTT 장치(`vd-01`)는 `virtualId` 로 연결한다.
 비어 있으면 `hestia/registry/devices` 나 실제 상태 보고에서 **같은 종류의 장치**를 찾아
 자동으로 연결하고, 같은 공간(area)의 장치를 우선한다. 필요하면 `PUT /devices/{id}` 로 직접 지정한다.
 
+### 알림 변환 (`hestia/notify/push` → Notification)
+
+MQTT 원본 스키마는 바꾸지 않고 Backend 에서 Flutter DTO 로 바꾼다.
+
+| MQTT | DTO | 규칙 |
+|---|---|---|
+| `notify_id` | `id` | 그대로 |
+| `scenario` | `scenario` | 원본 보존 |
+| `scenario` | `type` | 아래 표. MQTT 에 `type` 이 와도 쓰지 않는다 |
+| `priority` | `priority` | 모르는 값은 `normal` |
+| `payload.title` | `title` | 없으면 `payload.text` → `scenario` → `"HESTIA 알림"` |
+| `payload.text` | `message` | 없으면 `""` |
+| `channels` | `roomId` | virtual_id → registry `area`. 아래 참고 |
+| `sent_ts` | `createdAt` | epoch → ISO 8601 (로컬 타임존 offset 포함) |
+
+| scenario | type |
+|---|---|
+| `SAFETY` | `SAFETY` |
+| `SENSOR_FAULT` | `WARNING` |
+| `MEDICATION_PROMPT` | `REMINDER` |
+| `WAKE_ROUTINE` | `REMINDER` |
+| `SLEEP_ROUTINE` | `INFO` |
+| 그 외 | `priority` 가 `safety` 면 `SAFETY`, 아니면 `INFO` |
+
+`channels` 는 공간이 아니라 발송 대상 virtual_id 목록이다. 앞에서부터 `hestia/registry/devices` 의
+`area` 를 찾은 첫 채널을 `roomId` 로 쓴다. `voice` (RPi4 TTS) 는 건너뛴다.
+찾지 못하면 (voice 만 있음, registry 수신 전, 미등록 장치) 오류 없이 `roomId = null` 이다.
+
+```json
+// MQTT
+{"version": 1, "sent_ts": 1755500000, "src_id": "rpi5", "notify_id": "n-20260818-03",
+ "scenario": "WAKE_ROUTINE", "priority": "normal", "channels": ["vd-05", "voice"],
+ "requires_ack": true, "ack_deadline": 1755500600, "escalation_level": 1,
+ "payload": {"title": "수분 섭취", "text": "물 한 잔 드세요"}}
+
+// GET /api/v1/notifications (registry: vd-05 → kitchen)
+{"id": "n-20260818-03", "scenario": "WAKE_ROUTINE", "type": "REMINDER", "priority": "normal",
+ "title": "수분 섭취", "message": "물 한 잔 드세요", "createdAt": "2025-08-18T15:53:20+09:00",
+ "roomId": "kitchen", "explanationId": null, "delivered": false, "seen": false}
+```
+
+### 알림 ACK
+
+| 경로 | 처리 |
+|---|---|
+| `hestia/notify/ack` 수신 (채널 노드) | `notify_id` 로 찾아 `DELIVERED` → `delivered`, `SEEN` → `seen` + `delivered`. 모르는 알림은 무시, 다른 `ack_type` 은 schema 위반으로 버림 |
+| `POST /notifications/{id}/ack` (Flutter) | DB 기록 후 `hestia/notify/ack` 발행. 다시 수신돼도 처음 기록 시각을 유지한다 |
+
+DELIVERED 는 채널에 표시됨, SEEN 은 사용자가 실제로 확인함이다. 화면에 띄웠다고 SEEN 으로 처리하지 않는다.
+
 ### 알림 ↔ 판단 근거 연결
 
-`hestia/notify/push` payload 에 `context` (예: `"activity"`) 가 있으면 그 context 의
-현재 판단과 알림을 연결해 `explanationId` 를 채운다.
+`explanationId` 는 MQTT 필드가 아니라 Backend 개념이다. `hestia/notify/push` 에
+Backend 확장 필드 `context` (예: `"activity"`) 가 있으면 그 context 의 현재 판단과 알림을 연결한다.
+없으면 `explanationId = null` 이다.
 
 ## MQTT 구독 토픽
 
 `hestia/sensor/+/state`, `hestia/device/+/state`, `hestia/device/+/event`, `hestia/context/+`,
-`hestia/model/+`, `hestia/notify/push`, `hestia/notify/cancel`, `hestia/intervention/outcome`,
+`hestia/model/+`, `hestia/notify/push`, `hestia/notify/ack`, `hestia/notify/cancel`, `hestia/intervention/outcome`,
 `hestia/registry/devices`, `hestia/system/profile`
 
 발행: `hestia/notify/ack` (retain 하지 않음)
@@ -112,7 +163,7 @@ docker start hestia-engine
 
 | 경로 | 만드는 쪽 | 검증하는 쪽 |
 |---|---|---|
-| `responses/*.json` | `scripts/export_api_fixtures.py` (mock_mqtt 시나리오를 넣은 실제 응답) | `apps/test/api_contract_test.dart` 가 파싱 |
+| `responses/*.json` | `scripts/export_api_fixtures.py` (registry + mock_mqtt full 시나리오를 넣은 실제 응답) | `apps/test/api_contract_test.dart` 가 파싱 |
 | `requests/*.json` | Flutter 모델 `toJson` 결과 (`api_contract_test.dart` 가 일치 확인) | `tests/test_contract.py` 가 서버에 보내 저장 확인 |
 
 응답 구조를 바꾸면 `tests/test_contract.py` 가 실패한다. fixture 를 다시 만들고 Flutter 테스트를 돌린다.

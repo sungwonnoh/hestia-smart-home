@@ -77,12 +77,18 @@ def engine_messages() -> List[Message]:
         ("hestia/notify/push", envelope(
             MOCK_ENGINE_SRC,
             notify_id=f"n-mock-{now}",
-            scenario="MEDICATION",
-            type="REMINDER",
+            scenario="MEDICATION_PROMPT",
             priority="normal",
-            title="식사 후 복약 시간입니다.",
-            message="HESTIA가 식사 완료를 감지했습니다.\n복약 시간을 확인해주세요.",
-            area="living",
+            # 발송 대상 virtual_id. 공간은 Backend 가 registry 로 찾는다.
+            channels=["vd-05", "voice"],
+            requires_ack=True,
+            ack_deadline=now + 600,
+            escalation_level=1,
+            payload={
+                "title": "식사 후 복약 시간입니다.",
+                "text": "HESTIA가 식사 완료를 감지했습니다.\n복약 시간을 확인해주세요.",
+            },
+            # Backend 확장: 판단 근거(explanationId) 연결용
             context="activity",
         ), False),
     ]

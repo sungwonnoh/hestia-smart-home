@@ -1,6 +1,6 @@
 """Flutter 계약 테스트용 API 응답 fixture 생성.
 
-브로커 없이 FastAPI 를 띄우고 mock_mqtt 의 full 시나리오(가전 + context + 알림)를 넣은 뒤,
+브로커 없이 FastAPI 를 띄우고 registry 와 mock_mqtt 의 full 시나리오(가전 + context + 알림)를 넣은 뒤,
 Flutter ApiHestiaRepository 가 호출하는 응답을 JSON 파일로 저장한다.
 Flutter 는 손으로 쓴 JSON 대신 이 파일로 파싱을 검증한다.
 
@@ -33,11 +33,21 @@ sys.path.insert(0, str(BACKEND / "scripts"))
 
 from app.config import Settings  # noqa: E402
 from app.main import create_app  # noqa: E402
-from mock_mqtt import scenario  # noqa: E402
+from mock_mqtt import envelope, scenario  # noqa: E402
 
 FIXTURES = BACKEND.parent / "apps" / "test" / "fixtures" / "api"
 RESPONSES = FIXTURES / "responses"
 REQUESTS = FIXTURES / "requests"
+
+# 실제로는 Context Engine 이 retained 로 남겨 둔다. mock_mqtt 는 발행하지 않으므로
+# 여기서 넣어 알림 channels(virtual_id) → roomId 변환이 fixture 에 드러나게 한다.
+REGISTRY = (
+    ("vd-01", "smart_tv", "living"),
+    ("vd-02", "smart_light", "living"),
+    ("vd-03", "air_conditioner", "living"),
+    ("vd-05", "smart_fridge", "kitchen"),
+    ("vd-08", "washer", "utility"),
+)
 
 
 class RecordingMqtt:
@@ -79,7 +89,12 @@ def collect() -> dict[str, Any]:
         client.put(api + "/setup", json=setup).raise_for_status()
 
         ingest = app.state.hestia.ingest
-        for topic, payload, _retain in scenario("full"):
+        registry = envelope("rpi5", devices=[
+            {"virtual_id": vid, "device_type": dtype, "area": area}
+            for vid, dtype, area in REGISTRY
+        ])
+        messages = [("hestia/registry/devices", registry, True), *scenario("full")]
+        for topic, payload, _retain in messages:
             if not ingest.handle(topic, json.dumps(payload, ensure_ascii=False)):
                 raise RuntimeError(f"시나리오 메시지가 버려졌다: {topic}")
 

@@ -38,7 +38,7 @@
       },
       "online": true,
       "virtualId": "vd-03",
-      "lastSeenAt": "2026-10-04T21:24:21+09:00"
+      "lastSeenAt": "2026-10-04T21:59:48+09:00"
     },
     {
       "id": "light-01",
@@ -52,7 +52,7 @@
       },
       "online": true,
       "virtualId": "vd-02",
-      "lastSeenAt": "2026-10-04T21:24:21+09:00"
+      "lastSeenAt": "2026-10-04T21:59:48+09:00"
     },
     {
       "id": "refrigerator-01",
@@ -65,7 +65,7 @@
       },
       "online": true,
       "virtualId": "vd-05",
-      "lastSeenAt": "2026-10-04T21:24:21+09:00"
+      "lastSeenAt": "2026-10-04T21:59:48+09:00"
     },
     {
       "id": "tv-01",
@@ -79,7 +79,7 @@
       },
       "online": true,
       "virtualId": "vd-01",
-      "lastSeenAt": "2026-10-04T21:24:21+09:00"
+      "lastSeenAt": "2026-10-04T21:59:48+09:00"
     },
     {
       "id": "washer-01",
@@ -94,7 +94,7 @@
       },
       "online": true,
       "virtualId": "vd-08",
-      "lastSeenAt": "2026-10-04T21:24:21+09:00"
+      "lastSeenAt": "2026-10-04T21:59:48+09:00"
     }
   ],
   "preferences": {

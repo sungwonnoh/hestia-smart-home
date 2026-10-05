@@ -13,9 +13,11 @@ from typing import Any, Callable, Protocol
 from ..repositories.history_repository import HistoryRepository, NotificationRecord
 from ..schemas.common import SCHEMA_VERSION
 from ..schemas.notification import (
-    NOTIFICATION_TYPES,
     PRIORITIES,
+    SCENARIO_TYPES,
+    VOICE_CHANNEL,
     NotificationOut,
+    NotifyAckPayload,
     NotifyPushPayload,
 )
 from .context_service import iso
@@ -32,6 +34,25 @@ class Publisher(Protocol):
 
 class NotificationNotFound(Exception):
     pass
+
+
+def scenario_type(scenario: str, priority: str) -> str:
+    """scenario → 표시용 type. 모르는 scenario 는 priority 로 안전하게 정한다."""
+    mapped = SCENARIO_TYPES.get(scenario.upper())
+    if mapped:
+        return mapped
+    return "SAFETY" if priority == "safety" else "INFO"
+
+
+def channel_room(channels: list[str], area_of: Callable[[str], str | None]) -> str | None:
+    """발송 채널(virtual_id) 중 registry 에서 공간을 찾은 첫 번째. 없으면 None."""
+    for vid in channels:
+        if vid == VOICE_CHANNEL:
+            continue
+        area = area_of(vid)
+        if area:
+            return area
+    return None
 
 
 def to_out(n: NotificationRecord) -> NotificationOut:
@@ -56,11 +77,13 @@ class NotificationService:
         history: HistoryRepository,
         publisher: Publisher,
         src_id: str,
+        area_of: Callable[[str], str | None] = lambda vid: None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._history = history
         self._publisher = publisher
         self._src_id = src_id
+        self._area_of = area_of
         self._clock = clock
 
     # ------------------------------------------------------------ MQTT 입력
@@ -68,9 +91,9 @@ class NotificationService:
     def on_push(self, p: NotifyPushPayload, raw: dict[str, Any]) -> NotificationRecord | None:
         """새 알림이면 저장하고 돌려준다. 이미 받은 알림이면 None."""
         priority = p.priority.lower() if p.priority.lower() in PRIORITIES else "normal"
-        ntype = (p.type or "").upper()
-        if ntype not in NOTIFICATION_TYPES:
-            ntype = "SAFETY" if priority == "safety" else "INFO"
+        room_id = channel_room(p.channels, self._area_of)
+        if p.channels and room_id is None:
+            log.info("알림 공간을 찾지 못함: %s channels=%s", p.notify_id, p.channels)
 
         explanation_id = None
         if p.context:
@@ -80,15 +103,26 @@ class NotificationService:
         record = NotificationRecord(
             id=p.notify_id,
             scenario=p.scenario,
-            type=ntype,
+            type=scenario_type(p.scenario, priority),
             priority=priority,
-            title=p.title or p.text or p.scenario or "HESTIA 알림",
-            message=p.message or p.text or "",
-            room_id=p.area,
+            title=p.payload.title or p.payload.text or p.scenario or "HESTIA 알림",
+            message=p.payload.text or "",
+            room_id=room_id,
             explanation_id=explanation_id,
             created_at=float(p.sent_ts),
         )
         return record if self._history.add_notification(record, raw) else None
+
+    def on_ack(self, ack: NotifyAckPayload, recv_ts: float) -> bool:
+        """채널 노드의 ACK 를 반영한다. 모르는 알림이면 False.
+
+        이 API 가 발행한 ACK 도 다시 들어오지만 mark_ack 는 처음 시각을 유지하므로 무해하다.
+        """
+        if self._history.get_notification(ack.notify_id) is None:
+            log.info("모르는 알림의 ACK: %s %s", ack.notify_id, ack.ack_type)
+            return False
+        self._history.mark_ack(ack.notify_id, ack.ack_type, recv_ts)
+        return True
 
     def on_cancel(self, notify_id: str) -> bool:
         return self._history.cancel_notification(notify_id)

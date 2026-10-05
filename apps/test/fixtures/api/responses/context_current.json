@@ -1,7 +1,7 @@
 {
   "activity": {
     "state": "MEAL_DONE",
-    "since": 1791116661,
+    "since": 1791118788,
     "confidence": 0.87,
     "factors": {
       "area": "kitchen",
@@ -10,7 +10,7 @@
   },
   "presence": {
     "area": "kitchen",
-    "since": 1791116661,
+    "since": 1791118788,
     "areas": {
       "living": false,
       "kitchen": true

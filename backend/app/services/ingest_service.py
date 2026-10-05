@@ -26,6 +26,7 @@ from ..schemas.model import (
 )
 from ..schemas.notification import (
     InterventionOutcomePayload,
+    NotifyAckPayload,
     NotifyCancelPayload,
     NotifyPushPayload,
     payload_metadata,
@@ -45,6 +46,7 @@ SUBSCRIPTIONS = (
     "hestia/context/+",
     "hestia/model/+",
     "hestia/notify/push",
+    "hestia/notify/ack",
     "hestia/notify/cancel",
     "hestia/intervention/outcome",
     "hestia/registry/devices",
@@ -154,6 +156,12 @@ class IngestService:
             if record is not None:
                 self._emit("notification", push.sent_ts, "hestia/notify/push",
                            to_out(record).model_dump(by_alias=True))
+            return True
+
+        if parts[1:] == ["notify", "ack"]:
+            ack = NotifyAckPayload.model_validate(payload)
+            if self._notifications.on_ack(ack, recv_ts):
+                self._emit("notification_ack", ack.sent_ts, "hestia/notify/ack", payload)
             return True
 
         if parts[1:] == ["notify", "cancel"]:
