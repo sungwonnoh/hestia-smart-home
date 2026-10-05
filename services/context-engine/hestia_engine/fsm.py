@@ -48,6 +48,7 @@ class T0Entry:
 @runtime_checkable
 class T0Log(Protocol):
     def write(self, entry: T0Entry) -> None: ...
+    def of_date(self, date: str, *, tail: int = 200) -> tuple[T0Entry, ...]: ...
 
 
 class MemoryT0Log:
@@ -61,6 +62,9 @@ class MemoryT0Log:
 
     def of_type(self, type_: str) -> tuple[T0Entry, ...]:
         return tuple(e for e in self.entries if e.type == type_)
+
+    def of_date(self, date: str, *, tail: int = 200) -> tuple[T0Entry, ...]:
+        return tuple(e for e in self.entries if e.date == date)
 
 
 class FileT0Log:
@@ -81,6 +85,33 @@ class FileT0Log:
         except OSError as exc:
             # 로그 실패가 엔진을 멈추게 해서는 안 된다
             log.warning("t0 로그 기록 실패: %s", exc)
+
+    def of_date(self, date: str, *, tail: int = 200) -> tuple[T0Entry, ...]:
+        """그 날짜의 기록. 재시작 시 오늘 루틴을 복원하는 데 쓴다.
+           파일 끝 tail 줄만 읽는다.
+        """
+        if not self._path.exists():
+            return ()
+        try:
+            with self._path.open(encoding="utf-8") as fp:
+                lines = fp.readlines()[-tail:]
+        except OSError as exc:
+            log.warning("t0 로그 읽기 실패: %s", exc)
+            return ()
+
+        out: list[T0Entry] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if obj.get("date") != date:
+                    continue
+                out.append(T0Entry(**obj))
+            except (json.JSONDecodeError, TypeError) as exc:
+                log.warning("t0 로그 줄 건너뜀: %s", exc)
+        return tuple(out)
 
 
 # ==================================================================== Meal FSM
@@ -360,16 +391,52 @@ class WakeFSM:
         # 단 야간은 제외한다. 새벽 화장실이 기상으로 잡히면
         # wake_t0 가 새벽으로 찍히고 KDE 기상 분포가 통째로 오염된다.
         if self.state.state == "ASLEEP" and self._is_wake_hour():
+            left_at, has_bed = self._bed_left_at()
+            if has_bed and left_at is None:
+                # 침대 센서가 있는데 이탈 시각을 모른다 — retained 다.
+                # 실시간 전환이 올 때까지 기다린다.
+                return timers
+
+            t0 = left_at if left_at is not None else activity_since
+
             if activity_state in ("BATHROOM", "MEAL_PREP", "EATING", "KITCHEN_MISC",
                                   "WATCHING_TV", "RESTING", "LAUNDRY"):
-                self._confirm_wake(self._bed_left_at() or activity_since)
+                self._confirm_wake(t0)
             elif activity_state == "WAKING":
                 if now - activity_since >= wake_need:
-                    self._confirm_wake(self._bed_left_at() or activity_since)
+                    self._confirm_wake(t0)
                 else:
                     timers.append(("wake-confirm", activity_since + wake_need))
 
         return timers
+
+    def restore(self) -> None:
+        """기동 시 오늘의 t0 기록으로 루틴 플래그를 되살린다. """
+        if self._log is None:
+            return
+
+        today = day_key(self._clock.now())
+        entries = {e.type: e for e in self._log.of_date(today)}
+
+        wake = entries.get("wake")
+        if wake is None:
+            return                       # 아직 기상 기록이 없다
+
+        self.state = WakeState(
+            name="wake",
+            since=wake.t0,
+            state="AWAKE",
+            wake_t0=wake.t0,
+            hydration_done="hydration" in entries,
+            hydration_at=entries["hydration"].t0 if "hydration" in entries else None,
+            meal_done="meal" in entries,
+            meal_at=entries["meal"].t0 if "meal" in entries else None,
+        )
+        self._logged_wake_date = today
+        log.info(
+            "기상 루틴 복원: wake_t0=%s hydration=%s meal=%s",
+            wake.t0, self.state.hydration_done, self.state.meal_done,
+        )
 
     def note_hydration(self, prompted: bool = False) -> None:
         """정수기 급수 이벤트. 기상 후 창 안이면 루틴으로 기록한다."""
@@ -428,17 +495,21 @@ class WakeFSM:
         return start <= hour < end
 
     def _bed_left_at(self) -> float | None:
-        """침대 압력 패드가 해제된 시각.
+        """침대를 떠난 시각, 침대 센서가 있는가
+           센서가 없는 집과 retained 라 시각을 모르는 경우를 구별한다.
 
-        wake_t0 는 기상 확정 시각이 아니라 침대를 떠난 시각이다 —
-        KDE 기상 분포의 입력이므로 판정 지연이 섞이면 안 된다.
+           wake_t0 는 기상 확정 시각이 아니라 침대를 떠난 시각이다 — KDE 기상 분포의 입력이므로 판정 지연이 섞이면 안 된다.
         """
         from .world import BedState
 
+        found = False
         for st in self._world.sensors_by_role("SLEEP"):
-            if isinstance(st, BedState) and not st.occupied and st.changed_at > 0.0:
-                return st.changed_at
-        return None
+            if not isinstance(st, BedState):
+                continue
+            found = True
+            if not st.occupied and st.changed_at > 0.0:
+                return st.changed_at, True
+        return None, found
 
     def _confirm_wake(self, wake_t0: float) -> None:
         """wake_t0 는 기상 확정 시각이 아니라 침대를 떠난 시각이다."""

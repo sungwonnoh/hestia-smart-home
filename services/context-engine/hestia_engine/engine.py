@@ -16,6 +16,7 @@ RecordingPublisher 로 개발하고, MqttPublisher 는 배선할 때 붙인다.
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any, Protocol, runtime_checkable
 
 from .clock import Clock
@@ -70,6 +71,32 @@ class RecordingPublisher:
     @property
     def count(self) -> int:
         return len(self.published)
+
+
+class MqttPublisher:
+    """브로커로 내보낸다.
+        발행 실패가 엔진을 멈추게 하지 않음(브로커가 잠깐 끊겨도 판단 계속, 연결이 돌아오면 다음 주기 발행이 현재 상태를 다시 실음)
+    """
+
+    def __init__(self, client: Any) -> None:
+        self._client = client       # paho 클라이언트
+        self.sent = 0               # 진단용 카운터
+        self.failed = 0
+
+    def publish(self, topic: str, payload: dict[str, Any], *, retain: bool) -> None:
+        try:
+            # 딕셔너리를 JSON 문자열로 바꿔 브로커에 넘김
+            info = self._client.publish(
+                topic, json.dumps(payload, ensure_ascii=False), qos=1, retain=retain
+            )
+            if info.rc != 0:        # info.rc는 "큐에 넣는 데 성공했는가", rc != 0이면 보통 연결이 끊긴 상태
+                self.failed += 1
+                log.warning("발행 실패 rc=%s: %s", info.rc, topic)
+                return
+            self.sent += 1
+        except Exception as exc:                      # noqa: BLE001
+            self.failed += 1
+            log.warning("발행 예외 %s: %s", topic, exc)
 
 
 class NullPublisher:
@@ -135,6 +162,12 @@ class Engine:
         self._periodic_armed = False
 
     # ------------------------------------------------------------ 입구
+
+    def restore(self) -> None:
+        """기동 시 디스크에 남은 오늘 기록을 되살린다.
+           retained 로 복원되지 않는 것들이 있다 — 이벤트는 보관되지 않으므로 '아침에 물을 마셨다' 는 사실이 돌아오지 않는다.
+        """
+        self.context.wake_fsm.restore()
 
     def ingest(self, topic: str, payload: bytes | str, *, retained: bool = False) -> None:
         """수신 메시지 한 건. Sink 프로토콜의 유일한 메서드."""
