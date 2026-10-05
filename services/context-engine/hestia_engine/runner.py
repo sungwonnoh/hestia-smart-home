@@ -179,7 +179,7 @@ class Runner:
     def _status_payload(self, *, online: bool) -> dict[str, Any]:
         return {
             "version": SCHEMA_VERSION,
-            "sent_ts": time.time(),
+            "sent_ts": int(time.time()),
             "src_id": NODE_ID,
             "online": online,
             "ts_synced": True,          # RPi5 는 RTC 와 NTP 가 있다

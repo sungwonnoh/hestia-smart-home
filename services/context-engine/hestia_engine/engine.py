@@ -232,13 +232,12 @@ class Engine:
 
     def _publish(self, ctx: Context) -> None:
         """hestia/context/{name}, QoS 1, retained.
-
-        seq 가 없다 — retained 라 최신값만 의미가 있다 (명세).
+           seq 가 없다 — retained 라 최신값만 의미가 있다 (명세).
         """
         now = self._clock.now()
         payload = {
             "version": SCHEMA_VERSION,
-            "sent_ts": now,
+            "sent_ts": int(now),
             "src_id": SRC_ID,
             **ctx.payload(now),
         }

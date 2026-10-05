@@ -565,6 +565,7 @@ PRIMARY_FIELD = {
     "washer": "cycle",
     "robot_cleaner": "status",
     "doorbell": "power",
+    "display_node": "display",      # 무엇을 띄우고 있는가 가 주 상태
 }
 
 

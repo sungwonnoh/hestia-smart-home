@@ -502,14 +502,14 @@ class Notifier:
     def _push(self, n: PendingNotify, title: str, text: str) -> None:
         payload = {
             "version": SCHEMA_VERSION,
-            "sent_ts": self._clock.now(),
+            "sent_ts": int(self._clock.now()),
             "src_id": SRC_ID,
             "notify_id": n.notify_id,
             "scenario": n.scenario,
             "priority": n.priority,
             "channels": list(n.channels),
             "requires_ack": n.requires_ack,
-            "ack_deadline": n.ack_deadline,
+            "ack_deadline": int(n.ack_deadline),
             "escalation_level": n.escalation_level,
             "payload": {"title": title, "text": text},
         }
@@ -519,7 +519,7 @@ class Notifier:
         if VOICE in n.channels:
             self._publish("hestia/notify/speak", {
                 "version": SCHEMA_VERSION,
-                "sent_ts": self._clock.now(),
+                "sent_ts": int(self._clock.now()),
                 "src_id": SRC_ID,
                 "notify_id": n.notify_id,
                 "text": text,
@@ -530,7 +530,7 @@ class Notifier:
     def _cancel(self, notify_id: str) -> None:
         self._publish("hestia/notify/cancel", {
             "version": SCHEMA_VERSION,
-            "sent_ts": self._clock.now(),
+            "sent_ts": int(self._clock.now()),
             "src_id": SRC_ID,
             "notify_id": notify_id,
         }, False)
@@ -554,7 +554,7 @@ class Notifier:
         complied, evidence, delay = self._comply(n)
         self._publish("hestia/intervention/outcome", {
             "version": SCHEMA_VERSION,
-            "sent_ts": self._clock.now(),
+            "sent_ts": int(self._clock.now()),
             "src_id": SRC_ID,
             "intervention_id": f"i-{n.notify_id}",
             "type": "notify",

@@ -256,3 +256,11 @@ device_type = "smart_light"
 area = "bedroom"
 source = "mock"
 channel = true
+
+[[devices]]
+id = "vd-10"
+device_type = "display_node"
+area = "living"
+source = "esp32"
+channel = true
+note = "ESP32 디스플레이 + 버튼. ack 입력 수단"

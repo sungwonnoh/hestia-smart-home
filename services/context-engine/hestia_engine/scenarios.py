@@ -120,7 +120,7 @@ class ScenarioRunner:
         decision_id = self._next_id()
         self._publish("hestia/intervention/decision", {
             "version": SCHEMA_VERSION,
-            "sent_ts": self._clock.now(),
+            "sent_ts": int(self._clock.now()),
             "src_id": SRC_ID,
             "decision_id": decision_id,
             **d.payload(),

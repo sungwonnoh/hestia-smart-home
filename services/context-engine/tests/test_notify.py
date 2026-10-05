@@ -73,6 +73,8 @@ class Ctx:
             fields["door"] = "CLOSED"
         else:
             fields["power"] = power
+        if device_type == "display_node":
+            fields["display"] = ""
 
         msg = parse(f"hestia/device/{vid}/state", json.dumps(fields), self.clock.now())
         assert msg is not None
@@ -163,17 +165,21 @@ def test_store_purge_keeps_open():
 
 def test_picks_affinity_order(c):
     """affinity 순서가 선호 순위다."""
+    c.device_on("vd-10", "display_node")
     c.device_on("vd-05", "smart_fridge")
     c.device_on("vd-01", "smart_tv")
     chosen = c.notifier.channels.select("WAKE_ROUTINE", presence_at(None))
-    assert chosen[0] == "vd-05"            # 냉장고가 먼저
+    assert chosen == ("vd-10", "vd-05", "vd-01")    # display → fridge → tv
+
 
 
 def test_prefers_user_area(c):
+    c.device_on("vd-10", "display_node")
     c.device_on("vd-05", "smart_fridge")
     c.device_on("vd-01", "smart_tv")
     chosen = c.notifier.channels.select("WAKE_ROUTINE", presence_at("living"))
-    assert chosen == ("vd-01",)            # 거실에는 TV 뿐
+    assert "vd-05" not in chosen                     # 주방 냉장고는 빠진다
+    assert chosen == ("vd-10", "vd-01")
 
 
 def test_falls_back_when_area_empty(c):
@@ -218,6 +224,13 @@ def test_voice_blocked_in_quiet_hours(night):
 def test_safety_voice_pierces_quiet_hours(night):
     """안전은 정숙 시간대를 뚫는다."""
     assert night.notifier.channels.select("SAFETY", None, level=2) == (VOICE,)
+
+
+def test_display_node_is_channel(c):
+    """ESP32 디스플레이가 affinity 에 있으면 채널 후보다."""
+    c.device_on("vd-10", "display_node")
+    chosen = c.notifier.channels.select("WAKE_ROUTINE", presence_at("living"))
+    assert "vd-10" in chosen
 
 
 # ============================================================ 총량 제한

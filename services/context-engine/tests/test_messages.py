@@ -270,6 +270,44 @@ def test_unknown_model_name_none():
     p = {"version": 1, "sent_ts": 1790296798, "src_id": "rpi4", "trained_at": 1}
     assert go("hestia/model/whatever", p) is None
 
+# ============================================================ 디스플레이
+def test_display_node_state():
+    """ESP32 디스플레이 노드. 명세의 가전 9종에는 없지만
+    알림 채널이자 ack 입력 수단이라 파싱되어야 한다."""
+    msg = parse("hestia/device/vd-10/state", json.dumps({
+        "version": 1, "sent_ts": 1000, "src_id": "vd-10", "seq": 1,
+        "device_type": "display_node", "source": "esp32",
+        "power": "ON", "display": "물 한 잔 드세요", "notify_id": "n-001",
+    }), 2000.0)
+
+    assert isinstance(msg, m.DisplayNodeState)
+    assert msg.power == "ON"
+    assert msg.display == "물 한 잔 드세요"
+    assert msg.notify_id == "n-001"
+
+
+def test_display_node_empty_display():
+    """아무것도 안 띄우고 있으면 빈 문자열이다.
+
+    cancel 로 내렸는지를 이 필드로 확인한다 — null 과 '' 를 구별하지
+    않으면 '모른다' 와 '없다' 가 섞인다.
+    """
+    msg = parse("hestia/device/vd-10/state", json.dumps({
+        "version": 1, "sent_ts": 1000, "src_id": "vd-10", "seq": 1,
+        "device_type": "display_node", "source": "esp32", "power": "ON",
+    }), 2000.0)
+
+    assert msg is not None
+    assert msg.display == ""
+    assert msg.notify_id is None
+
+
+def test_display_node_requires_power():
+    msg = parse("hestia/device/vd-10/state", json.dumps({
+        "version": 1, "sent_ts": 1000, "src_id": "vd-10", "seq": 1,
+        "device_type": "display_node", "source": "esp32",
+    }), 2000.0)
+    assert msg is None
 
 # ============================================================ 전 클래스 생성
 
