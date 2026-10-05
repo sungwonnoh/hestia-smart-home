@@ -29,6 +29,7 @@ DEVICE_TYPES = frozenset(
     {
         "smart_tv", "smart_light", "air_conditioner", "air_purifier",
         "smart_fridge", "water_purifier", "washer", "robot_cleaner", "doorbell",
+        "display_node",     # ESP32 디스플레이 + 버튼 노드(알림 채널이자 ack 입력 수단)
     }
 )
 SOURCES = frozenset({"thinq", "mock", "esp32", "tasmota"})

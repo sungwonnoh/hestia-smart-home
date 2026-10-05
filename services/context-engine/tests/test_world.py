@@ -91,6 +91,12 @@ channel = true
 id = "vd-02"
 device_type = "washer"
 area = "kitchen"
+
+[[devices]]
+id = "vd-10"
+device_type = "display_node"
+area = "living"
+channel = true
 """
 
 POLICY = """
@@ -769,3 +775,34 @@ def test_retained_power_has_no_on_since(ctx):
         "type": "power", "watt": 1180, "state": "ON",
     })
     assert world.sensor("vs-03").on_since is None
+
+# ============================================================ 디스플레이
+def test_display_change_stamps_changed_at(ctx):
+    """표시 문구가 주 상태다. 같은 알림을 얼마나 오래 띄우고
+    있는지가 changed_at 으로 보인다."""
+    clock, _, world = ctx
+    feed(ctx, "hestia/device/vd-10/state", {
+        "version": 1, "sent_ts": 0, "src_id": "vd-10", "seq": 1,
+        "device_type": "display_node", "source": "esp32",
+        "power": "ON", "display": "물 한 잔 드세요",
+    })
+    first = clock.now()
+
+    clock.advance_by(300)
+    feed(ctx, "hestia/device/vd-10/state", {
+        "version": 1, "sent_ts": 0, "src_id": "vd-10", "seq": 2,
+        "device_type": "display_node", "source": "esp32",
+        "power": "ON", "display": "물 한 잔 드세요", "notify_id": "n-001",
+    })
+
+    st = world.device("vd-10")
+    assert st.changed_at == first          # 문구가 같으면 안 바뀐다
+    assert st.get("notify_id") == "n-001"  # 다른 필드는 갱신된다
+
+    clock.advance_by(300)
+    feed(ctx, "hestia/device/vd-10/state", {
+        "version": 1, "sent_ts": 0, "src_id": "vd-10", "seq": 3,
+        "device_type": "display_node", "source": "esp32",
+        "power": "ON", "display": "",
+    })
+    assert world.device("vd-10").changed_at == clock.now()   # 내렸다

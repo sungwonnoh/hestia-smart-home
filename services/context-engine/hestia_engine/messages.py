@@ -44,6 +44,18 @@ class DeviceStateMessage(Message):
 
 
 @dataclass(frozen=True, slots=True)
+class DisplayNodeState(DeviceStateMessage):
+    """ESP32 디스플레이 노드.
+       display 는 '지금 화면에 떠 있는 문구'다. ack 와 다르다 — DELIVERED 는 '띄웠다고 주장' 이고 display 는 '지금 떠 있다' 다.
+       cancel 로 내렸는지도 이 필드가 빈 문자열이 되는 것으로 보인다.
+    """
+
+    power: str = "OFF"
+    display: str = ""                  # 표시 중인 문구. 없으면 ""
+    notify_id: str | None = None       # 그 문구가 어느 알림인지
+
+
+@dataclass(frozen=True, slots=True)
 class DeviceEventMessage(Message):
     """hestia/device/{virtual_id}/event"""
 
@@ -307,6 +319,17 @@ class DoorbellState(DeviceStateMessage):
     power: str = "OFF"
 
 
+@dataclass(frozen=True, slots=True)
+class DisplayNodeState(DeviceStateMessage):
+    """ESP32 디스플레이 + 버튼 노드.(알림 채널이자 ack 입력 수단)
+       display 가 비어 있으면 아무것도 띄우지 않은 상태다 — cancel 로 내렸는지를 이 필드로 확인
+    """
+
+    power: str = "OFF"
+    display: str = ""                  # 표시 중인 문구. 없으면 ""
+    notify_id: str | None = None       # 그 문구가 어느 알림인지
+
+
 def parse_device_state(payload: dict, base: dict) -> DeviceStateMessage:
     device_type = _req(payload, "device_type", str)
     common = {
@@ -366,6 +389,14 @@ def parse_device_state(payload: dict, base: dict) -> DeviceStateMessage:
             )
         case "doorbell":
             return DoorbellState(**common, power=_one_of(payload, "power", DEVICE_POWER))
+        case "display_node":
+            # display 는 '지금 화면에 떠 있는 문구'. ack 와 다르다 — DELIVERED 는 '띄웠다고 주장' 이고 display 는 '지금 떠 있다' 다.
+            return DisplayNodeState(
+                **common,
+                power=_one_of(payload, "power", DEVICE_POWER),
+                display=_opt(payload, "display", str) or "",
+                notify_id=_opt(payload, "notify_id", str),
+            )
         case _:
             raise SchemaError(f"알 수 없는 device_type: {device_type!r}")
 

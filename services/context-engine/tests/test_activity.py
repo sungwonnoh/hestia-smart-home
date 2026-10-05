@@ -94,6 +94,13 @@ area = "utility"
 id = "vd-06"
 device_type = "water_purifier"
 area = "kitchen"
+
+[[devices]]
+id = "vd-10"
+device_type = "display_node"
+area = "living"
+channel = true
+note = "ESP32 디스플레이 + 버튼"
 """
 
 POLICY = (Path(__file__).parents[3] / "config" / "policy.toml").read_text(encoding="utf-8")

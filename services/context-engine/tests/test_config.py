@@ -424,6 +424,6 @@ def test_real_demo_config_loads():
     cfg = load_default()
     assert cfg.name == "demo"
     assert len(cfg.all_sensors()) == 16
-    assert len(cfg.all_devices()) == 9
+    assert len(cfg.all_devices()) == 10
     assert cfg.power_rule("vs-06").on_min_w == 300.0      # 인덕션
     assert "vd-01" in cfg.channels("living")
