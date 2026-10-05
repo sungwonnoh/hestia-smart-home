@@ -16,7 +16,9 @@ MqttNode::MqttNode(WifiManager& wifi, const char* host, uint16_t port)
       port_(port),
       state_(MqttState::Disconnected),
       lastAttempt_(0),
-      backoffMs_(BACKOFF_MIN_MS) {
+      backoffMs_(BACKOFF_MIN_MS),
+      msgHandler_(nullptr),
+      subCount_(0) {
 }
 
 void MqttNode::begin() {                                                        //접속 전 설정, setup()에서 한번 호출
@@ -38,6 +40,15 @@ void MqttNode::begin() {                                                        
     s_mqtt.onDisconnect([this](espMqttClientTypes::DisconnectReason reason) {
         this->handleDisconnect(static_cast<int>(reason));
     });
+    s_mqtt.onMessage([this](const espMqttClientTypes::MessageProperties& props,
+                            const char* topic,
+                            const uint8_t* payload,
+                            size_t len, size_t index, size_t total) {
+        (void)props; (void)index; (void)total;
+        if (this->msgHandler_ != nullptr) {
+            this->msgHandler_(topic, (const char*)payload, len);
+        }
+    });
 
     //설정 확인 로그
     logInfo("MQTT", "broker=%s:%u client=%s", host_, port_, nodeId());
@@ -56,6 +67,7 @@ void MqttNode::handleConnect() {
             (unsigned long)(millis() - lastAttempt_));
     state_     = MqttState::Connected;
     backoffMs_ = BACKOFF_MIN_MS;
+    resubscribe();
 }
 
 void MqttNode::handleDisconnect(int reason) {
@@ -105,4 +117,31 @@ bool MqttNode::publish(const char* topic, uint8_t qos, bool retain,
     }
     uint16_t packetId = s_mqtt.publish(topic, qos, retain, payload);
     return (qos == 0) || (packetId != 0);
+}
+
+
+// 구독 관리
+void MqttNode::setMessageHandler(MessageHandler handler) {
+    msgHandler_ = handler;
+}
+
+void MqttNode::subscribe(const char* topic, uint8_t qos) {
+    if (subCount_ >= MAX_SUBS) {
+        logError("MQTT", "sub slots full, dropped %s", topic);
+        return;
+    }
+    subs_[subCount_].topic = topic;
+    subs_[subCount_].qos   = qos;
+    subCount_++;
+
+    if (state_ == MqttState::Connected) {
+        s_mqtt.subscribe(topic, qos);
+    }
+}
+
+void MqttNode::resubscribe() {
+    for (uint8_t i = 0; i < subCount_; i++) {
+        s_mqtt.subscribe(subs_[i].topic, subs_[i].qos);
+        logInfo("MQTT", "sub %s (q%u)", subs_[i].topic, subs_[i].qos);
+    }
 }
