@@ -136,7 +136,7 @@ class Engine:
 
     # ------------------------------------------------------------ 입구
 
-    def ingest(self, topic: str, payload: bytes | str) -> None:
+    def ingest(self, topic: str, payload: bytes | str, *, retained: bool = False) -> None:
         """수신 메시지 한 건. Sink 프로토콜의 유일한 메서드."""
         recv_ts = self._clock.now()
         msg = parse(topic, payload, recv_ts)
@@ -146,10 +146,10 @@ class Engine:
             return
 
         self.received += 1
-        self._apply(msg)
+        self._apply(msg, retained=retained)
 
-    def _apply(self, msg: Message) -> None:
-        self._world.apply(msg)
+    def _apply(self, msg: Message, *, retained: bool = False) -> None:
+        self._world.apply(msg, retained=retained)
         self.context.note_event(msg)
 
         # 프로파일 전환은 설정 전체에 걸린다 (쿨다운·타임아웃·관측 창 배수)

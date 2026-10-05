@@ -463,3 +463,45 @@ def test_morning_scenario_logs_meal_t0():
     assert engine.wake_fsm.state.hydration_done is True
     assert engine.meal_fsm.t0 is not None            # 아직 열려 있다
     assert len(t0log.of_type("wake")) == 1
+
+
+# ============================================================ retained 수신
+def test_retained_power_does_not_open_session(c):
+    """재시작 직후 retained 로 'ON 이다' 만 알면 묶음을 열지 않는다.
+
+    언제 켰는지 모르는데 재시작 시각을 t0 로 쓰면 KDE 분포에
+    엉뚱한 점이 찍힌다. 틀린 값보다 빈 값이 낫다.
+    """
+    import json
+    from hestia_engine.messages import parse
+
+    msg = parse("hestia/sensor/vs-06/state", json.dumps({
+        "version": 1, "sent_ts": 1000, "src_id": "vs-06", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    }), c.clock.now())
+    c.world.apply(msg, retained=True)
+    c.engine.recompute()
+
+    assert c.engine.activity.state == "UNKNOWN"   # 주방 재실이 없으니
+    assert c.meal.t0 is None
+
+
+def test_power_after_restart_opens_normally(c):
+    """재시작 뒤 새로 켜지는 것은 실시간 이벤트라 정상 기록된다."""
+    import json
+    from hestia_engine.messages import parse
+
+    # retained 로 ON 을 먼저 받는다
+    msg = parse("hestia/sensor/vs-06/state", json.dumps({
+        "version": 1, "sent_ts": 1000, "src_id": "vs-06", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    }), c.clock.now())
+    c.world.apply(msg, retained=True)
+
+    # 꺼졌다가
+    c.at(MORNING + 100).power("vs-06", 2, "OFF")
+    # 다시 켜진다 — 이건 실시간
+    c.at(MORNING + 200).presence("vs-04", True)
+    c.at(MORNING + 300).power("vs-06", 1180, "ON")
+
+    assert c.meal.t0 == MORNING + 300

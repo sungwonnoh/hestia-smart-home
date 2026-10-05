@@ -140,6 +140,8 @@ class MealFSM:
                     # 조리기구가 켜진 채라 _evidence_t0 가 같은 시각을 돌려주고,
                     # 같은 t0 가 2시간마다 쌓이면 KDE 분포가 왜곡된다.
                     return timers
+                if not self._open(state, now):
+                    return timers       # 근거 시각이 없어 열지 못함
                 self._open(state, now)
             elif now - self.session.t0 >= self._timeout():
                 # 2시간째 조리 중일 리 없다. 센서가 켜진 채 방치됐거나
@@ -192,6 +194,13 @@ class MealFSM:
 
     def _open(self, state: str, now: float) -> None:
         t0 = self._evidence_t0(state, now)
+
+        #근거 시각을 찾지 못하면 열지 않음
+        t0 = self._evidence_t0(state, now)
+        if t0 is None:
+            log.debug("근거 시각 없음 — 묶음을 열지 않는다 (%s)", state)
+            return False
+        
         self.session = MealSession(t0=t0, opened_state=state, last_active_at=now)
         log.debug("식사 묶음 시작 t0=%s (%s)", t0, state)
 
@@ -222,8 +231,8 @@ class MealFSM:
             )
         log.debug("식사 묶음 종료 t0=%s duration=%.0f", s.t0, duration)
 
-    def _evidence_t0(self, state: str, now: float) -> float:
-        """근거가 생긴 시각을 t0 로 쓴다. 상태가 바뀐 시각이 아니다.
+    def _evidence_t0(self, state: str, now: float) -> float | None:
+        """근거가 생긴 시각을 t0 로 쓴다. 상태가 바뀐 시각이 아니다.(찾지 못하면 None-retained)
 
         인덕션을 켠 것은 09:20:00 이고 MEAL_PREP 판정은 그 뒤다.
         판정 시각을 쓰면 t0 가 밀리고 KDE 분포가 통째로 틀어진다.
@@ -240,7 +249,10 @@ class MealFSM:
 
         # EATING 으로 바로 열렸거나 전력 근거가 없으면 주방 체류 시작 시각
         dwell = self._world.dwell_sec("kitchen")
-        return now - dwell if dwell > 0 else now
+        if dwell > 0 :
+            return now - dwell
+
+        return None
 
     def _timeout(self) -> float:
         return float(self._config.value("fsm", "meal", "session_timeout_sec", default=7200))
