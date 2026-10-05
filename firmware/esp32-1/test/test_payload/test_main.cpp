@@ -63,6 +63,10 @@ void test_topics(void) {
                              nodeStatusTopic("esp32-ab34cd").c_str());
     TEST_ASSERT_EQUAL_STRING("hestia/node/esp32-ab34cd/announce",
                              nodeAnnounceTopic("esp32-ab34cd").c_str());
+    TEST_ASSERT_EQUAL_STRING("hestia/device/vd-10/state",
+                             deviceStateTopic("vd-10").c_str());
+    TEST_ASSERT_EQUAL_STRING("hestia/notify/ack",
+                             notifyAckTopic().c_str());
 }
 
 // ── confidence 규칙 ──────────────────────────
@@ -185,8 +189,8 @@ void test_status_lwt_form(void) {
 // ── announce ─────────────────────────────────
 void test_announce_emulates(void) {
     Emulated items[] = {
-        { "vs-01", SensorType::Presence },
-        { "vs-05c", SensorType::Climate }
+        sensorEmulated("vs-01", SensorType::Presence),
+        deviceEmulated("vd-10", "display_node")
     };
     std::string json = buildAnnounce("esp32-ab34cd", 1, 1755500000, "0.1.0", items, 2);
 
@@ -202,9 +206,12 @@ void test_announce_emulates(void) {
     TEST_ASSERT_EQUAL_STRING("vs-01", arr[0]["virtual_id"].as<const char*>());
     TEST_ASSERT_EQUAL_STRING("presence", arr[0]["type"].as<const char*>());
     TEST_ASSERT_EQUAL_STRING("esp32", arr[0]["source"].as<const char*>());
+    TEST_ASSERT_TRUE(arr[0]["device_type"].isNull());
 
-    TEST_ASSERT_EQUAL_STRING("vs-05c", arr[1]["virtual_id"].as<const char*>());
-    TEST_ASSERT_EQUAL_STRING("climate", arr[1]["type"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("vd-10", arr[1]["virtual_id"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("display_node", arr[1]["device_type"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("esp32", arr[1]["source"].as<const char*>());
+    TEST_ASSERT_TRUE(arr[1]["type"].isNull());
 }
 
 void test_announce_empty_list(void) {
@@ -214,6 +221,43 @@ void test_announce_empty_list(void) {
 
     TEST_ASSERT_EQUAL(0, doc["emulates"].as<JsonArray>().size());
 }
+
+
+// ── display_node state ───────────────────────
+void test_display_state_empty(void) {
+    std::string json = buildDisplayState("vd-10", 7, 1791209970, "", nullptr);
+    JsonDocument doc;
+    deserializeJson(doc, json);
+
+    TEST_ASSERT_EQUAL_STRING("vd-10", doc["src_id"].as<const char*>());
+    TEST_ASSERT_EQUAL(7, doc["seq"].as<uint32_t>());
+    TEST_ASSERT_EQUAL_STRING("display_node", doc["device_type"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("esp32", doc["source"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("ON", doc["power"].as<const char*>());
+
+    TEST_ASSERT_EQUAL_STRING("", doc["display"].as<const char*>());
+    TEST_ASSERT_FALSE(doc["display"].isNull());    // 키는 있어야 한다
+    TEST_ASSERT_TRUE(doc["notify_id"].isNull());   // 키가 없어야 한다
+}
+
+void test_display_state_showing(void) {
+    std::string json = buildDisplayState("vd-10", 8, 1791209970,
+                                         "물 한 잔 드세요", "n-20261005-001");
+    JsonDocument doc;
+    deserializeJson(doc, json);
+
+    TEST_ASSERT_EQUAL_STRING("물 한 잔 드세요", doc["display"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("n-20261005-001", doc["notify_id"].as<const char*>());
+}
+
+void test_display_state_blank_notify_id_omitted(void) {
+    std::string json = buildDisplayState("vd-10", 9, 1791209970, "", "");
+    JsonDocument doc;
+    deserializeJson(doc, json);
+
+    TEST_ASSERT_TRUE(doc["notify_id"].isNull());   // "" 도 걸러낸다
+}
+
 
 int main(int argc, char** argv) {
     UNITY_BEGIN();
@@ -242,6 +286,10 @@ int main(int argc, char** argv) {
 
     RUN_TEST(test_announce_emulates);
     RUN_TEST(test_announce_empty_list);
+
+    RUN_TEST(test_display_state_empty);
+    RUN_TEST(test_display_state_showing);
+    RUN_TEST(test_display_state_blank_notify_id_omitted);
 
     UNITY_END();
     return 0;

@@ -55,6 +55,17 @@ std::string sensorStateTopic(const char* virtual_id){
     return t;
 }
 
+std::string deviceStateTopic(const char* virtual_id){
+    std::string t = "hestia/device/";
+    t += virtual_id;
+    t += "/state";
+    return t;
+}
+
+std::string notifyAckTopic(){
+    return "hestia/notify/ack";
+}
+
 std::string buildPresence(const char* src_id, uint32_t seq, uint32_t sent_ts, 
     bool present, uint8_t energy, uint16_t distance_cm){
         JsonDocument doc;
@@ -151,6 +162,26 @@ std::string buildClimate(const char* src_id, uint32_t seq, uint32_t sent_ts,
     return out;
 }
 
+std::string buildDisplayState(const char* src_id, uint32_t seq, uint32_t sent_ts,
+                              const char* display,
+                              const char* notify_id) {
+    JsonDocument doc;
+    putEnvelope(doc, src_id, seq, sent_ts);
+
+    doc["device_type"] = "display_node";
+    doc["source"]      = "esp32";
+    doc["power"]       = "ON";
+    doc["display"]     = display;
+
+    if (notify_id != nullptr && notify_id[0] != '\0') {
+        doc["notify_id"] = notify_id;
+    }
+
+    std::string out;
+    serializeJson(doc, out);
+    return out;
+}
+
 //SeqCounter 클래스 함수
 SeqCounter::SeqCounter() : count_(0) { }
 
@@ -204,6 +235,17 @@ std::string nodeAnnounceTopic(const char* node_id){
     return t;
 }
 
+
+//노드(esp32) announce
+Emulated sensorEmulated(const char* virtual_id, SensorType type) {
+    return Emulated{ virtual_id, false, typeName(type) };
+}
+
+Emulated deviceEmulated(const char* virtual_id, const char* device_type) {
+    return Emulated{ virtual_id, true, device_type };
+}
+
+
 //노드(esp32) announce
 std::string buildAnnounce(const char* node_id, uint32_t seq, uint32_t sent_ts,
                           const char* fw,
@@ -216,8 +258,12 @@ std::string buildAnnounce(const char* node_id, uint32_t seq, uint32_t sent_ts,
     for (uint8_t i = 0; i < count; i++){
         JsonObject item = arr.add<JsonObject>();
         item["virtual_id"] = items[i].virtual_id;
-        item["type"]       = typeName(items[i].type);
-        item["source"]     = "esp32";
+        if (items[i].is_device) {
+            item["device_type"] = items[i].type_name;
+        } else {
+            item["type"] = items[i].type_name;
+        }
+        item["source"] = "esp32";
     }
 
     std::string out;

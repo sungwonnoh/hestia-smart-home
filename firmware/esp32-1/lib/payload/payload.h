@@ -17,6 +17,8 @@ const char*  typeName(SensorType type);
 uint8_t      qosFor(SensorType type);
 bool         isRetained(SensorType type);
 std::string   sensorStateTopic(const char* virtual_id);
+std::string deviceStateTopic(const char* virtual_id);
+std::string notifyAckTopic();
 
 std::string buildPresence(const char* src_id, uint32_t seq, uint32_t sent_ts, bool present, uint8_t energy, uint16_t distance_cm);
 std::string buildMotion(const char* src_id, uint32_t seq, uint32_t sent_ts, bool motion);
@@ -25,6 +27,9 @@ std::string buildPower(const char* src_id, uint32_t seq, uint32_t sent_ts, uint1
 std::string buildBed(const char* src_id, uint32_t seq, uint32_t sent_ts, bool occupied);
 std::string buildLight(const char* src_id, uint32_t seq, uint32_t sent_ts, uint32_t illuminance_lux);
 std::string buildClimate(const char* src_id, uint32_t seq, uint32_t sent_ts, float temperature_c, uint8_t humidity_pct);
+std::string buildDisplayState(const char* src_id, uint32_t seq, uint32_t sent_ts,
+                              const char* display,
+                              const char* notify_id);       // display: 표시 중인 문구. 없으면 "" / notify_id: 표시 중인 알림 id. nullptr이면 필드를 넣지 않는다.
 
 class SeqCounter {
 public:
@@ -55,8 +60,13 @@ std::string nodeAnnounceTopic(const char* node_id);
 //노드(esp32보드) announce
 struct Emulated {
     const char* virtual_id;
-    SensorType  type;
+    bool        is_device;      // true면 "device_type" 키, false면 "type" 키
+    const char* type_name;      // "motion" 또는 "display_node"
 };
+
+// 생성 헬퍼 — 센서는 enum을 거쳐 오타를 막는다
+Emulated sensorEmulated(const char* virtual_id, SensorType type);
+Emulated deviceEmulated(const char* virtual_id, const char* device_type);
 
 std::string buildAnnounce(const char* node_id, uint32_t seq, uint32_t sent_ts, const char* fw, const Emulated* items, uint8_t count);
 
