@@ -16,7 +16,7 @@ import 'support/fake_api.dart';
 
 const notificationJson = {
   'id': 'n-001',
-  'scenario': 'MEDICATION',
+  'scenario': 'MEDICATION_PROMPT',
   'type': 'REMINDER',
   'priority': 'normal',
   'title': '복약 시간입니다',

@@ -53,7 +53,7 @@ void main() {
   test('명세 예시 Notification 응답을 파싱한다', () {
     final n = HestiaNotification.fromJson({
       'id': 'n-20260930-001',
-      'scenario': 'MEDICATION',
+      'scenario': 'MEDICATION_PROMPT',
       'priority': 'normal',
       'title': '복약 시간입니다',
       'message': '식사 후 복약 시간을 확인해주세요.',

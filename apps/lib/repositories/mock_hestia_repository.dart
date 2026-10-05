@@ -269,7 +269,7 @@ class MockHestiaRepository implements HestiaRepository, DemoControls {
   static List<HestiaNotification> _seedNotifications(DateTime now) => [
         HestiaNotification(
           id: 'n-demo-001',
-          scenario: 'MEDICATION',
+          scenario: 'MEDICATION_PROMPT',
           type: NotificationType.reminder,
           priority: NotificationPriority.normal,
           title: '식사 후 복약 시간입니다.',
@@ -326,7 +326,7 @@ class MockHestiaRepository implements HestiaRepository, DemoControls {
       explanationId: 'exp-cooking-unattended',
     ),
     _DemoTemplate(
-      scenario: 'MEDICATION',
+      scenario: 'MEDICATION_PROMPT',
       type: NotificationType.reminder,
       priority: NotificationPriority.normal,
       title: '식사 후 복약 시간입니다.',
