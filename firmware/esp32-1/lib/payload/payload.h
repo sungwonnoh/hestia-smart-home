@@ -70,4 +70,30 @@ Emulated deviceEmulated(const char* virtual_id, const char* device_type);
 
 std::string buildAnnounce(const char* node_id, uint32_t seq, uint32_t sent_ts, const char* fw, const Emulated* items, uint8_t count);
 
+
+// ── 알림 수신·확인 ───────────────────────────
+extern const char* const ACK_DELIVERED;   // "DELIVERED"
+extern const char* const ACK_SEEN;        // "SEEN"
+
+// notify/push 를 해석한 결과. 문자열은 내용을 복사해 보관한다
+// (수신 콜백의 버퍼는 콜백이 끝나면 사라지므로).
+struct NotifyPush {
+    char notify_id[40];
+    char title[64];
+    char text[128];
+    char priority[8];      // low / normal / high / health
+    char scenario[24];
+    bool requires_ack;
+    bool valid;            // false면 처리하지 않는다
+};
+
+// channels 배열에 my_virtual_id 가 들어 있는가
+bool isForMe(const JsonDocument& doc, const char* my_virtual_id);
+
+// 파싱 실패나 notify_id 부재 시 valid=false 로 돌려준다
+NotifyPush parseNotifyPush(const JsonDocument& doc);
+
+std::string buildNotifyAck(const char* src_id, uint32_t seq, uint32_t sent_ts,
+                           const char* notify_id, const char* ack_type);
+
 }  // namespace hestia

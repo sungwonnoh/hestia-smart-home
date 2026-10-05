@@ -259,6 +259,87 @@ void test_display_state_blank_notify_id_omitted(void) {
 }
 
 
+// ── 알림 수신 ────────────────────────────────
+static void loadPush(JsonDocument& doc, const char* json) {
+    deserializeJson(doc, json);
+}
+
+void test_is_for_me(void) {
+    JsonDocument doc;
+
+    loadPush(doc, R"({"channels":["vd-01","vd-10"]})");
+    TEST_ASSERT_TRUE(isForMe(doc, "vd-10"));
+
+    loadPush(doc, R"({"channels":["vd-01"]})");
+    TEST_ASSERT_FALSE(isForMe(doc, "vd-10"));
+
+    loadPush(doc, R"({"channels":["voice"]})");
+    TEST_ASSERT_FALSE(isForMe(doc, "vd-10"));
+
+    loadPush(doc, R"({"channels":[]})");
+    TEST_ASSERT_FALSE(isForMe(doc, "vd-10"));
+
+    loadPush(doc, R"({})");                       // channels 자체가 없음
+    TEST_ASSERT_FALSE(isForMe(doc, "vd-10"));
+}
+
+void test_parse_push_full(void) {
+    JsonDocument doc;
+    loadPush(doc, R"({"version":1,"sent_ts":1791197088,"src_id":"rpi5",
+        "notify_id":"n-20261005-001","scenario":"WAKE_ROUTINE",
+        "priority":"normal","channels":["vd-10"],
+        "requires_ack":true,"ack_deadline":1791197688,"escalation_level":1,
+        "payload":{"title":"수분 섭취","text":"물 한 잔 드세요"}})");
+
+    NotifyPush p = parseNotifyPush(doc);
+
+    TEST_ASSERT_TRUE(p.valid);
+    TEST_ASSERT_EQUAL_STRING("n-20261005-001", p.notify_id);
+    TEST_ASSERT_EQUAL_STRING("수분 섭취", p.title);
+    TEST_ASSERT_EQUAL_STRING("물 한 잔 드세요", p.text);
+    TEST_ASSERT_EQUAL_STRING("normal", p.priority);
+    TEST_ASSERT_EQUAL_STRING("WAKE_ROUTINE", p.scenario);
+    TEST_ASSERT_TRUE(p.requires_ack);
+}
+
+void test_parse_push_missing_fields(void) {
+    JsonDocument doc;
+
+    // notify_id 만 있는 최소 페이로드
+    loadPush(doc, R"({"notify_id":"n-001"})");
+    NotifyPush p = parseNotifyPush(doc);
+    TEST_ASSERT_TRUE(p.valid);
+    TEST_ASSERT_EQUAL_STRING("", p.title);
+    TEST_ASSERT_EQUAL_STRING("", p.text);
+    TEST_ASSERT_EQUAL_STRING("normal", p.priority);   // 기본값
+    TEST_ASSERT_FALSE(p.requires_ack);
+
+    // notify_id 없음 → 처리 불가
+    loadPush(doc, R"({"priority":"high"})");
+    TEST_ASSERT_FALSE(parseNotifyPush(doc).valid);
+
+    // 타입이 다름
+    loadPush(doc, R"({"notify_id":12345,"requires_ack":"yes"})");
+    TEST_ASSERT_FALSE(parseNotifyPush(doc).valid);    // 숫자는 문자열로 못 읽음
+}
+
+void test_notify_ack(void) {
+    std::string json = buildNotifyAck("vd-10", 42, 1791197100,
+                                      "n-20261005-001", ACK_DELIVERED);
+    JsonDocument doc;
+    deserializeJson(doc, json);
+
+    TEST_ASSERT_EQUAL_STRING("vd-10", doc["src_id"].as<const char*>());
+    TEST_ASSERT_EQUAL(42, doc["seq"].as<uint32_t>());
+    TEST_ASSERT_EQUAL_STRING("n-20261005-001", doc["notify_id"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("DELIVERED", doc["ack_type"].as<const char*>());
+
+    json = buildNotifyAck("vd-10", 43, 1791197200, "n-20261005-001", ACK_SEEN);
+    deserializeJson(doc, json);
+    TEST_ASSERT_EQUAL_STRING("SEEN", doc["ack_type"].as<const char*>());
+}
+
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
 
@@ -290,6 +371,11 @@ int main(int argc, char** argv) {
     RUN_TEST(test_display_state_empty);
     RUN_TEST(test_display_state_showing);
     RUN_TEST(test_display_state_blank_notify_id_omitted);
+
+    RUN_TEST(test_is_for_me);
+    RUN_TEST(test_parse_push_full);
+    RUN_TEST(test_parse_push_missing_fields);
+    RUN_TEST(test_notify_ack);
 
     UNITY_END();
     return 0;
