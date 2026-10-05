@@ -20,6 +20,7 @@ from typing import Any, Callable
 from .clock import Clock
 from .config import Config
 from .notify import Notifier
+from .world import PresenceState, WorldState
 from .policy import Decision, InterventionPolicy
 from .timeutil import day_key
 
@@ -38,12 +39,14 @@ class ScenarioRunner:
         self,
         clock: Clock,
         config: Config,
+        world: WorldState,
         policy: InterventionPolicy,
         notifier: Notifier,
         publish: Callable[[str, dict[str, Any], bool], None],
     ) -> None:
         self._clock = clock
         self._config = config
+        self._world = world
         self._policy = policy
         self._notifier = notifier
         self._publish = publish
@@ -55,32 +58,103 @@ class ScenarioRunner:
 
     def tick(self, context: Any) -> None:
         """시나리오를 전부 훑는다. 조건에 안 맞으면 조용히 지나간다."""
+        timers: list[tuple[str, float]] = []
         if context.away is None or context.suppression is None:
-            return                              # 아직 판단이 서지 않았다
-        self._wake_routine(context)
+            return timers
+        timers += self._safety(context)
+        timers += self._wake_routine(context)
+        return timers
 
+
+    # ------------------------------------------------------------ SAFETY
+
+    def _safety(self, context: Any) -> list[tuple[str, float]]:
+        """낙상 의심 — 사람이 있는데 오래 움직이지 않는다.
+           개인 분포를 쓰지 않는다. 지금은 화장실만 본다.
+        """
+        timers: list[tuple[str, float]] = []
+        now = self._clock.now()
+
+        areas = tuple(
+            self._config.value("thresholds", "safety", "still_areas", default=["bathroom"])
+        )
+        limit = float(
+            self._config.value("thresholds", "safety", "still_sec", default=900)
+        )
+
+        for area in areas:
+            if not self._area_occupied(area):
+                continue
+
+            since = self._still_since(area)
+            if since is None:
+                # 움직이는 중. 멈추는 순간 센서가 메시지를 보내
+                # 다시 걸리므로 예약하지 않는다.
+                self._emit_decision(Decision(
+                    kind=f"safety:{area}",
+                    candidate=False,
+                    reason="MOVING",
+                    factors={"area": area, "still_sec": 0, "limit_sec": limit},
+                ))
+                continue
+            
+            still = now - since
+            over = still >= limit
+
+            decision = Decision(
+                kind=f"safety:{area}",
+                candidate=over,
+                reason="STILL_TOO_LONG" if over else "MOVING",
+                confidence=1.0 if over else 0.0,
+                factors={"area": area, "still_sec": round(still), "limit_sec": limit},
+            )
+            decision_id = self._emit_decision(decision)
+
+            if not over:
+                timers.append((f"safety-{area}", since + limit))
+                continue
+
+            self._notifier.send(
+                scenario="SAFETY",
+                title=str(self._notify_value("SAFETY", "title", "확인이 필요합니다")),
+                text=str(self._notify_value("SAFETY", "text", "괜찮으신가요?")),
+                priority="health",
+                presence=context.presence,
+                suppression=context.suppression,     # SAFETY 는 억제를 뚫는다
+                comply_check="movement",
+                comply_area=area,
+                decision_id=decision_id,
+                confidence=decision.confidence,
+            )
+            return timers          # 한 번에 하나만
+
+        return timers
+    
+    
     # ------------------------------------------------------------ WAKE_ROUTINE
 
-    def _wake_routine(self, context: Any) -> None:
+    def _wake_routine(self, context: Any) -> list[tuple[str, float]]:
         """기상 후 수분 섭취.
 
         시나리오 4. 기상하고 평소보다 오래 물을 마시지 않으면 권한다. hydration_lag 분포를 쓰는 것이 핵심이다 — "몇 시에" 가 아니라 "기상하고 몇 분 만에" 가 이 사람의 패턴이다.
         """
+        timers: list[tuple[str, float]] = []
         wake = context.wake_fsm.state
 
         # ① 트리거 — 기상했고, 아직 안 마셨고, 집에 있어야 한다
         if wake.state != "AWAKE" or wake.wake_t0 is None:
-            return
+            return timers
         if wake.hydration_done:
-            return
+            return timers
 
         # 기상 직후 몇 분은 묻지 않는다. 일어나자마자 물을 마시는
         # 사람도 있고, 화장실부터 가는 사람도 있다.
+        now = self._clock.now()
         grace = float(
             self._config.value("scenarios", "wake", "hydration_grace_sec", default=900)
         )
-        if self._clock.now() - wake.wake_t0 < grace:
-            return
+        if now - wake.wake_t0 < grace:
+            return [("wake-hydration", wake.wake_t0 + grace)]
 
         # ② 판정 — 개인 분포에서 지금이 이상하게 늦은가
         decision = self._policy.evaluate_hydration(
@@ -92,8 +166,11 @@ class ScenarioRunner:
         )
         decision_id = self._emit_decision(decision)
 
-        if not decision.candidate:
-            return
+        if not decision.candidate:      # 아직 평소 범위
+            recheck = float(
+                self._config.value("scenarios", "wake", "recheck_sec", default=300)
+            )
+            return [("wake-hydration", now + recheck)]
 
         # ③ 발송
         self._notifier.send(
@@ -104,9 +181,11 @@ class ScenarioRunner:
             presence=context.presence,
             suppression=context.suppression,
             comply_kind="hydration",
+            comply_check="wake",
             decision_id=decision_id,
             confidence=decision.confidence,
         )
+        return timers
 
     # ------------------------------------------------------------ 판정 발행
 
@@ -136,3 +215,29 @@ class ScenarioRunner:
     def _next_id(self) -> str:
         self._seq += 1
         return f"d-{day_key(self._clock.now()).replace('-', '')}-{self._seq:03d}"
+
+    def _area_occupied(self, area: str) -> bool:
+        """그 구역에 사람이 있는가."""
+        return any(
+            isinstance(s, PresenceState) and s.present
+            for s in self._world.sensors_of(area)
+        )
+
+    def _area_occupied(self, area: str) -> bool:
+        """그 구역에 사람이 있는가."""
+        return any(
+            isinstance(s, PresenceState) and s.present
+            for s in self._world.sensors_of(area)
+        )
+
+    def _still_since(self, area: str) -> float | None:
+        """그 구역에서 정지가 시작된 시각. 움직이는 중이면 None."""
+        spans = [
+            s.still_since
+            for s in self._world.sensors_of(area)
+            if isinstance(s, PresenceState) and s.present and s.still_since is not None
+        ]
+        return min(spans) if spans else None
+
+    def _notify_value(self, scenario: str, key: str, default: Any) -> Any:
+        return self._config.notify_policy(scenario).get(key, default)

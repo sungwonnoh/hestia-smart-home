@@ -64,6 +64,8 @@ class PendingNotify:
     decision_id: str | None = None           # 어느 판정에서 나온 알림인지 (판정 id)
     confidence: float = 0.0                  # 해당 판정의 확신도. outcome에 포함
     comply_kind: str | None = None           # hydration / meal / medication
+    comply_check: str | None = None          # wake / movement. 판정 근거의 종류
+    comply_area: str | None = None           # movement 판정 대상 구역
     baseline_at: float | None = None         # 발송 시점의 _at. 이보다 뒤여야 comply
     closed_at: float | None = None           # 알림이 닫힌 시각. None이면 진행 중
     closed_reason: str | None = None         # SEEN / TIMEOUT / EXPIRED / CANCELLED
@@ -328,6 +330,8 @@ class Notifier:
         presence: PresenceContext | None = None,
         suppression: SuppressionContext | None = None,
         comply_kind: str | None = None,
+        comply_check: str | None = None,
+        comply_area: str | None = None,
         decision_id: str | None = None,
         confidence: float = 0.0,
     ) -> str | None:
@@ -373,6 +377,8 @@ class Notifier:
             decision_id=decision_id,
             confidence=confidence,
             comply_kind=comply_kind,
+            comply_check=comply_check,
+            comply_area=comply_area,
             baseline_at=self._done_at(comply_kind),
         )
         self.store.add(pending)
@@ -407,7 +413,7 @@ class Notifier:
         self._sched.cancel(f"notify-expiry-{notify_id}")
 
         # 봤다고 한 것이지 했다는 뜻은 아니다. comply 창은 계속 돈다
-        if n.comply_kind is None:
+        if n.comply_check is None:
             self._close(notify_id, CLOSED_SEEN)
 
     # ------------------------------------------------------------ 타이머
@@ -424,7 +430,7 @@ class Notifier:
             lambda: self._on_expiry(n.notify_id),
             key=f"notify-expiry-{n.notify_id}",
         )
-        if n.comply_kind is not None:
+        if n.comply_check is not None:
             self._sched.at(
                 n.comply_until,
                 lambda: self._on_comply_window(n.notify_id),
@@ -544,7 +550,7 @@ class Notifier:
 
         # comply 창이 아직 남았으면 outcome 은 그때 확정한다 (명세:
         # 확정 시점에 한 번만 발행)
-        if closed.comply_kind is not None and self._clock.now() < closed.comply_until:
+        if closed.comply_check is not None and self._clock.now() < closed.comply_until:
             return
         self._emit_outcome(closed)
 
@@ -575,8 +581,20 @@ class Notifier:
 
     def _comply(self, n: PendingNotify) -> tuple[bool, str | None, float | None]:       # complied, evidence, delay
         """관측 창 안에 해당 행동이 일어났는가.
-        FSM 의 _at 시각을 읽는다. 발송 시점의 값(baseline_at)보다 뒤여야 이 알림 덕분이다 — 09:00 에 이미 물을 마셨는데 09:30 알림의
-        성과로 기록하면 L3 가 엉뚱한 채널을 학습한다.
+           시나리오마다 판정 근거가 다르다. - 근거의 종류를 발송 시점에 받아 여기서 분기
+        """
+        match n.comply_check:
+            case "wake":
+                return self._comply_wake(n)
+            case "movement":
+                return self._comply_movement(n)
+            case _:
+                return False, None, None
+            
+
+    def _comply_wake(self, n: PendingNotify) -> tuple[bool, str | None, float | None]:
+        """FSM 의 _at 시각을 읽는다.
+           발송 시점의 값(baseline_at)보다 뒤여야 이 알림 덕분이다 — 09:00 에 이미 물을 마셨는데 09:30 알림의 성과로 기록하면 L3 가 엉뚱한 채널을 학습한다.
         """
         if n.comply_kind is None or self._wake is None:
             return False, None, None
@@ -593,6 +611,29 @@ class Notifier:
             "medication": "notify:ack",
         }.get(n.comply_kind, n.comply_kind)
         return True, evidence, round(done_at - n.sent_at)
+    
+
+    def _comply_movement(self, n: PendingNotify) -> tuple[bool, str | None, float | None]:
+        """정지가 풀렸는가. '괜찮으신가요' 에 대한 응답은 움직임이다.
+
+        still_sec 이 0 이면 지금 움직이는 중이고, 발송 시점보다 짧으면 한 번 끊겼다가 다시 멈춘 것이다. (어느 쪽이든 그 사이에 움직였다는 뜻)
+
+        delay_sec 은 알 수 없다 — 언제 움직였는지가 아니라 '지금 움직이고 있나' 만 보이기 때문
+        """
+        if n.comply_area is None:
+            return False, None, None
+
+        still = self._world.still_sec(n.comply_area)
+        if still == 0.0:
+            return True, f"movement:{n.comply_area}", None
+
+        # 발송 후 경과보다 정지가 짧으면 중간에 한 번 움직인 것이다
+        elapsed = self._clock.now() - n.sent_at
+        if still < elapsed:
+            return True, f"movement:{n.comply_area}", round(elapsed - still)
+
+        return False, None, None
+    
 
     def _done_at(self, kind: str | None) -> float | None:
         if kind is None or self._wake is None:
