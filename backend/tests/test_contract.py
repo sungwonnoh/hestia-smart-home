@@ -83,7 +83,8 @@ def test_flutter_preferences_request_is_stored_as_sent():
 
 
 def test_flutter_ack_request_marks_seen(hestia):
-    hestia.receive("hestia/notify/push", envelope("rpi5", notify_id="n-001", title="복약"))
+    hestia.receive("hestia/notify/push", envelope("rpi5", notify_id="n-001",
+                                                      payload={"title": "복약"}))
     res = hestia.post("/notifications/n-001/ack", json=load(REQUESTS / "ack_seen.json"))
     assert res.json() == {"success": True, "forwarded": True}
     assert hestia.get("/notifications").json()[0]["seen"] is True

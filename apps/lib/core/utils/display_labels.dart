@@ -190,7 +190,7 @@ class NotificationStyle {
   }
 
   static IconData? _scenarioIcon(String scenario) => switch (scenario) {
-        'MEDICATION' => Icons.medication_rounded,
+        'MEDICATION_PROMPT' => Icons.medication_rounded,
         'LAUNDRY_DONE' => Icons.local_laundry_service_rounded,
         'VISITOR' => Icons.door_front_door_rounded,
         'AIR_QUALITY' => Icons.air_rounded,

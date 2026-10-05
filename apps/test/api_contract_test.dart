@@ -47,7 +47,7 @@ void main() {
   final rawContext = _response('context_current');
   final rawExplanation = _response('explanation_by_id');
   final notificationId = rawNotifications.first['id'] as String;
-  final explanationId = rawNotifications.first['explanationId'] as String;
+  final explanationId = rawExplanation['id'] as String;
 
   setUp(() async {
     api = FakeApi();
@@ -157,9 +157,12 @@ void main() {
       }
     });
 
-    test('explanation: 알림의 explanationId로 판단 근거를 연다', () async {
-      final n = (await repo.getNotifications()).first;
-      final e = (await repo.getExplanation(n.explanationId!))!;
+    test('explanation: 판단 id로 판단 근거를 연다', () async {
+      // 알림 explanationId는 decision_id ↔ notify_id 연결이 확정될 때까지 null이다.
+      // 앱은 null이면 최신 판단 근거를 보여준다.
+      expect(rawNotifications.every((n) => n['explanationId'] == null), isTrue);
+
+      final e = (await repo.getExplanation(explanationId))!;
       expect(e.id, rawExplanation['id']);
       expect(e.contextName, rawExplanation['contextName']);
       expect(e.state, rawExplanation['state']);

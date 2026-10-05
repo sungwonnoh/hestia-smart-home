@@ -50,7 +50,8 @@ def build_container(settings: Settings, mqtt: Any = None) -> Container:
     cache = StateCache()
     monitor = MonitorHub()
     devices = DeviceService(device_repo, cache, settings.device_stale_sec)
-    notifications = NotificationService(history, mqtt, settings.src_id)
+    notifications = NotificationService(history, mqtt, settings.src_id,
+                                        area_of=cache.registry_area)
     ingest = IngestService(cache, history, devices, notifications, monitor)
     mqtt.set_handler(ingest.handle)
     return Container(

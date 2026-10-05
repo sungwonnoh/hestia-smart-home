@@ -1,8 +1,8 @@
 """알림 MQTT payload 와 Flutter Notification 모델."""
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import ConfigDict
+from pydantic import BaseModel, ConfigDict
 
 from .common import ApiModel, MqttEnvelope, Number
 
@@ -10,26 +10,56 @@ ACK_TYPES = ("DELIVERED", "SEEN")
 PRIORITIES = ("low", "normal", "high", "safety")
 NOTIFICATION_TYPES = ("INFO", "REMINDER", "WARNING", "SAFETY")
 
+# channels 의 RPi4 TTS 예약값. 장치가 아니므로 공간 변환에서 뺀다.
+VOICE_CHANNEL = "voice"
+
+# Context Engine scenario → Flutter 표시용 type. scenario 원본은 따로 보존한다.
+SCENARIO_TYPES: Dict[str, str] = {
+    "SAFETY": "SAFETY",
+    "SENSOR_FAULT": "WARNING",
+    "MEDICATION_PROMPT": "REMINDER",
+    "WAKE_ROUTINE": "REMINDER",
+    "SLEEP_ROUTINE": "INFO",
+}
+
 
 # ------------------------------------------------------------------ MQTT
+
+
+class NotifyContent(BaseModel):
+    """notify/push 의 payload — 채널에 보여줄 내용."""
+
+    model_config = ConfigDict(extra="allow")
+
+    title: Optional[str] = None
+    text: Optional[str] = None
 
 
 class NotifyPushPayload(MqttEnvelope):
     """hestia/notify/push — Context Engine 이 생성한 알림.
 
     필수는 notify_id 뿐이다. 나머지는 없어도 화면에 보일 수 있게 기본값을 둔다.
+    type 은 MQTT 필드가 아니다. Backend 가 scenario 로 만든다.
+    판단 근거(explanationId)와의 연결은 Context Engine decision_id ↔ notify_id 전달 방식이
+    확정될 때까지 하지 않는다. 명세 밖 필드로 추정하지 않는다.
     """
 
     notify_id: str
     scenario: str = ""
     priority: str = "normal"
-    type: Optional[str] = None
-    title: Optional[str] = None
-    message: Optional[str] = None
-    text: Optional[str] = None
-    area: Optional[str] = None
-    # 이 알림을 만든 context 이름 (예: activity). 판단 근거와 연결할 때 쓴다.
-    context: Optional[str] = None
+    # 발송 대상 virtual_id 목록 (공간 아님). "voice" 는 RPi4 TTS.
+    channels: List[str] = []
+    requires_ack: bool = False
+    ack_deadline: Optional[Number] = None
+    escalation_level: Optional[int] = None
+    payload: NotifyContent = NotifyContent()
+
+
+class NotifyAckPayload(MqttEnvelope):
+    """hestia/notify/ack — 채널 노드(또는 이 API)가 보낸 응답."""
+
+    notify_id: str
+    ack_type: Literal["DELIVERED", "SEEN"]
 
 
 class NotifyCancelPayload(MqttEnvelope):

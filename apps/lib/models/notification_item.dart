@@ -62,7 +62,7 @@ class HestiaNotification {
 
   final String id;
 
-  /// 시나리오 키 (예: MEDICATION, LAUNDRY_DONE, VISITOR).
+  /// Context Engine 시나리오 원본 (예: MEDICATION_PROMPT, WAKE_ROUTINE). 표시 분류는 [type].
   final String scenario;
   final NotificationType type;
   final NotificationPriority priority;

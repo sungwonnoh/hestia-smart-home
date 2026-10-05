@@ -67,15 +67,13 @@ def test_registry_binding_prefers_same_area(hestia):
 
 
 def test_notify_push_is_stored_once_and_cancel_hides_it(hestia):
-    push = envelope("rpi5", notify_id="n-001", scenario="MEDICATION", priority="normal",
-                    title="복약 시간입니다", message="식사 후 복약 시간을 확인해주세요.",
-                    area="living")
+    push = envelope("rpi5", notify_id="n-001", scenario="MEDICATION_PROMPT", priority="normal",
+                    payload={"title": "복약 시간입니다", "text": "식사 후 복약 시간을 확인해주세요."})
     assert hestia.receive("hestia/notify/push", push)
     assert hestia.receive("hestia/notify/push", push)  # 재전송
     items = hestia.get("/notifications").json()
     assert [n["id"] for n in items] == ["n-001"]
     assert items[0]["delivered"] is False and items[0]["seen"] is False
-    assert items[0]["roomId"] == "living"
 
     hestia.receive("hestia/notify/cancel", envelope("rpi5", notify_id="n-001"))
     assert hestia.get("/notifications").json() == []
@@ -83,7 +81,8 @@ def test_notify_push_is_stored_once_and_cancel_hides_it(hestia):
 
 def test_safety_priority_becomes_safety_type(hestia):
     hestia.receive("hestia/notify/push",
-                   envelope("rpi5", notify_id="n-s", priority="safety", text="인덕션 확인"))
+                   envelope("rpi5", notify_id="n-s", priority="safety",
+                            payload={"text": "인덕션 확인"}))
     n = hestia.get("/notifications").json()[0]
     assert n["type"] == "SAFETY"
     assert n["title"] == "인덕션 확인"
@@ -91,7 +90,7 @@ def test_safety_priority_becomes_safety_type(hestia):
 
 def test_intervention_outcome_is_recorded(hestia):
     assert hestia.receive("hestia/intervention/outcome", envelope(
-        "rpi5", notify_id="n-001", scenario="MEDICATION", outcome="COMPLIED", delay_sec=120))
+        "rpi5", notify_id="n-001", scenario="MEDICATION_PROMPT", outcome="COMPLIED", delay_sec=120))
     assert hestia.container.history.count_outcomes() == 1
 
 

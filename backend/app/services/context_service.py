@@ -111,6 +111,12 @@ class StateCache:
 
     # ------------------------------------------------------------ reads
 
+    def registry_area(self, vid: str) -> str | None:
+        """registry 에 등록된 장치의 공간(area). 모르면 None."""
+        with self._lock:
+            entry = self._registry.get(vid)
+            return entry.area if entry else None
+
     def current_context(self) -> dict[str, dict[str, Any]]:
         """GET /api/v1/context/current — 받은 context 만, 명세 순서대로."""
         with self._lock:
