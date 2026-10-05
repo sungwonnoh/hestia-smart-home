@@ -3,10 +3,13 @@ name = "hestia-engine"
 version = "0.1.0"
 description = "HESTIA Context Engine (RPi5)"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["paho-mqtt>=2.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["hestia_engine"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

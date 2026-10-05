@@ -1,0 +1,19 @@
+[Unit]
+Description=HESTIA Context Engine
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HESTIA_CONFIG=/data/hestia/config
+Environment=HESTIA_DATA=/data/hestia
+Environment=MQTT_HOST=localhost
+ExecStart=/usr/bin/python3 -m hestia_engine.runner
+Restart=always
+RestartSec=5
+# 브로커가 늦게 떠도 connect_async 가 재시도하므로 의존을 강제하지 않는다
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

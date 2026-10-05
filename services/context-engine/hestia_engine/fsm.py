@@ -48,6 +48,7 @@ class T0Entry:
 @runtime_checkable
 class T0Log(Protocol):
     def write(self, entry: T0Entry) -> None: ...
+    def of_date(self, date: str, *, tail: int = 200) -> tuple[T0Entry, ...]: ...
 
 
 class MemoryT0Log:
@@ -61,6 +62,9 @@ class MemoryT0Log:
 
     def of_type(self, type_: str) -> tuple[T0Entry, ...]:
         return tuple(e for e in self.entries if e.type == type_)
+
+    def of_date(self, date: str, *, tail: int = 200) -> tuple[T0Entry, ...]:
+        return tuple(e for e in self.entries if e.date == date)
 
 
 class FileT0Log:
@@ -81,6 +85,33 @@ class FileT0Log:
         except OSError as exc:
             # 로그 실패가 엔진을 멈추게 해서는 안 된다
             log.warning("t0 로그 기록 실패: %s", exc)
+
+    def of_date(self, date: str, *, tail: int = 200) -> tuple[T0Entry, ...]:
+        """그 날짜의 기록. 재시작 시 오늘 루틴을 복원하는 데 쓴다.
+           파일 끝 tail 줄만 읽는다.
+        """
+        if not self._path.exists():
+            return ()
+        try:
+            with self._path.open(encoding="utf-8") as fp:
+                lines = fp.readlines()[-tail:]
+        except OSError as exc:
+            log.warning("t0 로그 읽기 실패: %s", exc)
+            return ()
+
+        out: list[T0Entry] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if obj.get("date") != date:
+                    continue
+                out.append(T0Entry(**obj))
+            except (json.JSONDecodeError, TypeError) as exc:
+                log.warning("t0 로그 줄 건너뜀: %s", exc)
+        return tuple(out)
 
 
 # ==================================================================== Meal FSM
@@ -140,7 +171,8 @@ class MealFSM:
                     # 조리기구가 켜진 채라 _evidence_t0 가 같은 시각을 돌려주고,
                     # 같은 t0 가 2시간마다 쌓이면 KDE 분포가 왜곡된다.
                     return timers
-                self._open(state, now)
+                if not self._open(state, now):
+                    return timers       # 근거 시각이 없어 열지 못함
             elif now - self.session.t0 >= self._timeout():
                 # 2시간째 조리 중일 리 없다. 센서가 켜진 채 방치됐거나
                 # 판정이 고착된 것이다. 닫되 새로 열지 않는다.
@@ -170,9 +202,12 @@ class MealFSM:
         if now - self.session.t0 >= self._timeout():
             self._close(now, use_now=True)
             self._timed_out = True
-        elif idle >= grace:
+        elif idle >= grace and not self._cooking():
             # 묶음은 last_active_at 에 끝났고 우리가 grace 만큼 기다린 것뿐이다
+            # 단 조리 중(인덕션 불켜짐)이면 닫지 않는다 (끓이는 동안 자리 비움 상황)
             self._close(now)
+        elif self._cooking():
+            timers.append(("meal-close", now + grace))
         else:
             timers.append(("meal-close", self.session.last_active_at + grace))
 
@@ -190,8 +225,13 @@ class MealFSM:
 
     # ------------------------------------------------------------ 내부
 
-    def _open(self, state: str, now: float) -> None:
+    def _open(self, state: str, now: float) -> bool:
+        #근거 시각을 찾지 못하면 열지 않음
         t0 = self._evidence_t0(state, now)
+        if t0 is None:
+            log.debug("근거 시각 없음 — 묶음을 열지 않는다 (%s)", state)
+            return False
+        
         self.session = MealSession(t0=t0, opened_state=state, last_active_at=now)
         log.debug("식사 묶음 시작 t0=%s (%s)", t0, state)
 
@@ -222,29 +262,41 @@ class MealFSM:
             )
         log.debug("식사 묶음 종료 t0=%s duration=%.0f", s.t0, duration)
 
-    def _evidence_t0(self, state: str, now: float) -> float:
-        """근거가 생긴 시각을 t0 로 쓴다. 상태가 바뀐 시각이 아니다.
+    def _evidence_t0(self, state: str, now: float) -> float | None:
+        """근거가 생긴 시각을 t0 로 쓴다. 상태가 바뀐 시각이 아니다.(찾지 못하면 None-retained)
 
         인덕션을 켠 것은 09:20:00 이고 MEAL_PREP 판정은 그 뒤다.
         판정 시각을 쓰면 t0 가 밀리고 KDE 분포가 통째로 틀어진다.
         """
-        if state == "MEAL_PREP":
-            # 조리 기구가 켜진 시각 — World State 가 후보 시각으로 들고 있다
-            starts = [
-                st.changed_at
-                for st in self._world.sensors_by_role("MEAL")
-                if isinstance(st, PowerState) and st.state == "ON" and st.changed_at > 0.0
-            ]
-            if starts:
-                return min(starts)
+        lookback = float(
+            self._config.value("fsm", "meal", "cooking_lookback_sec", default=7200)
+        )
+
+        starts = [
+            st.on_since
+            for st in self._world.sensors_by_role("MEAL")
+            if isinstance(st, PowerState)
+            and st.on_since is not None
+            and now - st.on_since <= lookback
+        ]
+        if starts:
+            return min(starts)
 
         # EATING 으로 바로 열렸거나 전력 근거가 없으면 주방 체류 시작 시각
         dwell = self._world.dwell_sec("kitchen")
-        return now - dwell if dwell > 0 else now
+        if dwell > 0 :
+            return now - dwell
+
+        return None
 
     def _timeout(self) -> float:
         return float(self._config.value("fsm", "meal", "session_timeout_sec", default=7200))
 
+    def _cooking(self) -> bool:
+        """조리 기구가 켜져 있는가.
+            불이 켜져 있는 동안은 그 식사가 조리가 진행 중
+        """
+        return self._world.any_power_on("MEAL")
 
 # ==================================================================== wake FSM
 
@@ -348,16 +400,52 @@ class WakeFSM:
         # 단 야간은 제외한다. 새벽 화장실이 기상으로 잡히면
         # wake_t0 가 새벽으로 찍히고 KDE 기상 분포가 통째로 오염된다.
         if self.state.state == "ASLEEP" and self._is_wake_hour():
+            left_at, has_bed = self._bed_left_at()
+            if has_bed and left_at is None:
+                # 침대 센서가 있는데 이탈 시각을 모른다 — retained 다.
+                # 실시간 전환이 올 때까지 기다린다.
+                return timers
+
+            t0 = left_at if left_at is not None else activity_since
+
             if activity_state in ("BATHROOM", "MEAL_PREP", "EATING", "KITCHEN_MISC",
                                   "WATCHING_TV", "RESTING", "LAUNDRY"):
-                self._confirm_wake(self._bed_left_at() or activity_since)
+                self._confirm_wake(t0)
             elif activity_state == "WAKING":
                 if now - activity_since >= wake_need:
-                    self._confirm_wake(self._bed_left_at() or activity_since)
+                    self._confirm_wake(t0)
                 else:
                     timers.append(("wake-confirm", activity_since + wake_need))
 
         return timers
+
+    def restore(self) -> None:
+        """기동 시 오늘의 t0 기록으로 루틴 플래그를 되살린다. """
+        if self._log is None:
+            return
+
+        today = day_key(self._clock.now())
+        entries = {e.type: e for e in self._log.of_date(today)}
+
+        wake = entries.get("wake")
+        if wake is None:
+            return                       # 아직 기상 기록이 없다
+
+        self.state = WakeState(
+            name="wake",
+            since=wake.t0,
+            state="AWAKE",
+            wake_t0=wake.t0,
+            hydration_done="hydration" in entries,
+            hydration_at=entries["hydration"].t0 if "hydration" in entries else None,
+            meal_done="meal" in entries,
+            meal_at=entries["meal"].t0 if "meal" in entries else None,
+        )
+        self._logged_wake_date = today
+        log.info(
+            "기상 루틴 복원: wake_t0=%s hydration=%s meal=%s",
+            wake.t0, self.state.hydration_done, self.state.meal_done,
+        )
 
     def note_hydration(self, prompted: bool = False) -> None:
         """정수기 급수 이벤트. 기상 후 창 안이면 루틴으로 기록한다."""
@@ -415,18 +503,22 @@ class WakeFSM:
         end = int(self._config.value("fsm", "wake", "latest_hour", default=12))
         return start <= hour < end
 
-    def _bed_left_at(self) -> float | None:
-        """침대 압력 패드가 해제된 시각.
+    def _bed_left_at(self) -> float | tuple[float | None, bool]:
+        """침대를 떠난 시각, 침대 센서가 있는가
+           센서가 없는 집과 retained 라 시각을 모르는 경우를 구별한다.
 
-        wake_t0 는 기상 확정 시각이 아니라 침대를 떠난 시각이다 —
-        KDE 기상 분포의 입력이므로 판정 지연이 섞이면 안 된다.
+           wake_t0 는 기상 확정 시각이 아니라 침대를 떠난 시각이다 — KDE 기상 분포의 입력이므로 판정 지연이 섞이면 안 된다.
         """
         from .world import BedState
 
+        found = False
         for st in self._world.sensors_by_role("SLEEP"):
-            if isinstance(st, BedState) and not st.occupied and st.changed_at > 0.0:
-                return st.changed_at
-        return None
+            if not isinstance(st, BedState):
+                continue
+            found = True
+            if not st.occupied and st.changed_at > 0.0:
+                return st.changed_at, True
+        return None, found
 
     def _confirm_wake(self, wake_t0: float) -> None:
         """wake_t0 는 기상 확정 시각이 아니라 침대를 떠난 시각이다."""

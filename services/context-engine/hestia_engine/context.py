@@ -190,12 +190,12 @@ class PresenceEvaluator:
                     if st.present:      #present=true인 경우
                         kind = "mmwave_active" if st.energy >= active_min else "mmwave_still"
                         found.append(
-                            Evidence(st.vid, kind, float(conf.get(kind, 0.9)), st.changed_at)
+                            Evidence(st.vid, kind, float(conf.get(kind, 0.9)), st.changed_at or now)
                         )
                     else:
                         # present=false 를 즉시 믿되, grace 만큼은 유예한다. (30초 유예)
                         # 노드 재부팅 직후의 한 건을 걸러내는 용도.
-                        if now - st.changed_at < grace:
+                        if st.changed_at > 0.0 and now - st.changed_at < grace:
                             found.append(
                                 Evidence(
                                     st.vid, "mmwave_still",
@@ -209,7 +209,7 @@ class PresenceEvaluator:
                     factors[f"{st.vid}_occupied"] = st.occupied
                     if st.occupied:     #압력 패드가 점유 상태이면
                         found.append(
-                            Evidence(st.vid, "bed", float(conf.get("bed", 0.8)), st.changed_at)
+                            Evidence(st.vid, "bed", float(conf.get("bed", 0.8)), st.changed_at or now)
                         )
 
                 case MotionState():     #PIR
@@ -238,7 +238,7 @@ class PresenceEvaluator:
         지금 true 면 changed_at 이고, false 면 링버퍼에서 찾는다.
         """
         if st.motion:
-            return st.changed_at
+            return st.changed_at if st.changed_at > 0.0 else None
         for ts, value in reversed(st.history):
             if value is True:
                 return ts
@@ -553,7 +553,9 @@ class OccupancyEvaluator:
                     case _:
                         continue
                 if score > best:
-                    best, since = score, st.changed_at
+                    # 전환 시각을 모르면 관측 시작 시각을 쓴다.
+                    best = score
+                    since = st.changed_at if st.changed_at > 0.0 else self._clock.now()
             if best >= min_conf:
                 out.append((area, since))
         return out
@@ -821,7 +823,7 @@ class ContextEngine:
         if activity.state == "EATING":
             self.wake_fsm.note_meal()
 
-        if self.meal_fsm.t0 is not None and activity.state in ("MEAL_PREP", "EATING"):
+        if self.meal_fsm.t0 is not None and activity.state in ("MEAL_PREP", "EATING", "KITCHEN_MISC"):
             activity = replace(activity, t0=self.meal_fsm.t0)
 
         if not activity.same_as(self.activity):

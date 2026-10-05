@@ -610,3 +610,162 @@ def test_morning_scenario():
     assert world.dwell_sec("kitchen") == 1790297100.0 - 1790295010.0
     assert world.device("vd-01").get("power") == "OFF"
     assert world.nodes == {"esp32-1": True}
+
+
+# ============================================================ retained 수신
+
+
+def node_status(ctx, node_id: str = "esp32-1", *, synced: bool = True):
+    feed(ctx, f"hestia/node/{node_id}/status", {
+        "version": 1, "sent_ts": 0, "src_id": node_id,
+        "online": True, "ts_synced": synced,
+    })
+
+
+def feed_retained(ctx, topic: str, payload: dict):
+    clock, _, world = ctx
+    msg = parse(topic, json.dumps(payload), clock.now())
+    assert msg is not None
+    world.apply(msg, retained=True)
+
+
+def test_retained_uses_sent_ts_when_synced(ctx):
+    """브로커가 보관하던 값은 recv_ts 가 재연결 시각일 뿐이다.
+
+    노드가 NTP 동기화돼 있으면 sent_ts 가 실제 사건 시각이다.
+    """
+    clock, _, world = ctx
+    node_status(ctx, "esp32-2", synced=True)
+
+    sent = clock.now() - 1200                     # 20분 전에 발행된 값
+    feed_retained(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": sent, "src_id": "vs-03", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    })
+
+    assert world.sensor("vs-03").changed_at == sent
+
+
+def test_retained_skips_changed_at_when_unsynced(ctx):
+    """ts_synced 가 false 면 sent_ts 를 절대시각으로 해석하지 않는다 (명세).
+
+    changed_at 이 0.0 으로 남아 '언제 그렇게 됐는지 모른다' 가 된다.
+    재시작 시각을 찍으면 t0 가 그 시각으로 기록돼 분포가 오염된다.
+    """
+    _, _, world = ctx
+    node_status(ctx, "esp32-2", synced=False)
+
+    feed_retained(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": 1000, "src_id": "vs-03", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    })
+
+    st = world.sensor("vs-03")
+    assert st.changed_at == 0.0
+    assert st.state == "ON"                       # 값 자체는 반영된다
+
+
+def test_retained_without_node_status(ctx):
+    """노드 상태를 아직 못 받았으면 믿지 않는다."""
+    _, _, world = ctx
+    feed_retained(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": 1000, "src_id": "vs-03", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    })
+    assert world.sensor("vs-03").changed_at == 0.0
+
+
+def test_retained_rejects_future_sent_ts(ctx):
+    """미래 시각은 노드 시계가 틀어진 것이다."""
+    clock, _, world = ctx
+    node_status(ctx, "esp32-2", synced=True)
+
+    feed_retained(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": clock.now() + 600, "src_id": "vs-03", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    })
+    assert world.sensor("vs-03").changed_at == 0.0
+
+
+def test_retained_rejects_stale_sent_ts(ctx):
+    """하루보다 오래된 값은 노드가 오래 죽어 있었다는 뜻이다."""
+    clock, _, world = ctx
+    node_status(ctx, "esp32-2", synced=True)
+
+    feed_retained(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": clock.now() - 200000, "src_id": "vs-03", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    })
+    assert world.sensor("vs-03").changed_at == 0.0
+
+
+def test_retained_presence_skips_still_since(ctx):
+    """정지 지속은 쓰러짐 판정의 근거다. 재시작 시각부터 세면 안 된다."""
+    _, _, world = ctx
+    node_status(ctx, "esp32-1", synced=False)
+
+    feed_retained(ctx, "hestia/sensor/vs-01/state", {
+        "version": 1, "sent_ts": 1000, "src_id": "vs-01", "seq": 1,
+        "type": "presence", "present": True, "confidence": "high",
+        "energy": 3, "distance_cm": 60,
+    })
+
+    st = world.sensor("vs-01")
+    assert st.present is True
+    assert st.still_since is None                 # 언제부터 정지인지 모른다
+
+
+def test_live_message_uses_recv_ts(ctx):
+    """실시간 메시지는 recv_ts 가 곧 사건 시각이다."""
+    clock, _, world = ctx
+    feed(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": 1000, "src_id": "vs-03", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    })
+    assert world.sensor("vs-03").changed_at == clock.now()
+
+def test_power_on_since_survives_off(ctx):
+    """조리가 끝나도 켠 시각은 남는다 — 묶음의 t0 가 그것이다."""
+    clock, _, world = ctx
+    feed(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": 0, "src_id": "vs-03", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    })
+    on_at = clock.now()
+
+    clock.advance_by(600)
+    feed(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": 0, "src_id": "vs-03", "seq": 2,
+        "type": "power", "watt": 3, "state": "STANDBY",
+    })
+
+    st = world.sensor("vs-03")
+    assert st.state == "STANDBY"
+    assert st.changed_at == clock.now()      # 지금 상태가 된 시각
+    assert st.on_since == on_at              # 켠 시각은 그대로
+
+
+def test_power_on_since_updates_on_restart(ctx):
+    """다시 켜지면 갱신된다."""
+    clock, _, world = ctx
+    for seq, (watt, state) in enumerate(
+        [(1180, "ON"), (3, "STANDBY"), (1180, "ON")], start=1
+    ):
+        feed(ctx, "hestia/sensor/vs-03/state", {
+            "version": 1, "sent_ts": 0, "src_id": "vs-03", "seq": seq,
+            "type": "power", "watt": watt, "state": state,
+        })
+        clock.advance_by(300)
+
+    assert world.sensor("vs-03").on_since == clock.now() - 300
+
+
+def test_retained_power_has_no_on_since(ctx):
+    """언제 켰는지 모르면 남기지 않는다."""
+    _, _, world = ctx
+    node_status(ctx, "esp32-2", synced=False)
+    feed_retained(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": 1000, "src_id": "vs-03", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    })
+    assert world.sensor("vs-03").on_since is None

@@ -109,6 +109,7 @@ class PowerState(SensorState):
     watt: float = 0.0
     state: str = "OFF"
     changed_at: float = 0.0     #pending_state가 변화한 시각
+    on_since: float | None = None           #마지막으로 ON이 된 시각
     pending_state: str | None = None        #검증을 위해 대기 중인 다음 상태 후보
     pending_since: float | None = None      #pending_state 대기 열에 들어간 시각
 
@@ -216,71 +217,81 @@ class WorldState:
 
     # ------------------------------------------------------------ 투입
 
-    def apply(self, msg: m.Message) -> None:
-        """파싱된 메시지 한 건을 반영한다.
-        설정에 없거나 비활성인 ID 는 버린다. 
+    def apply(self, msg: m.Message, *, retained: bool = False) -> None:
+        """파싱된 메시지 한 건을 반영한다.-설정에 없거나 비활성인 ID 는 버린다. 
+            retained는 브로커가 보관하던 값-RPi5 재연결시 브로커로부터 받음
+            이때 노드가 NTP 동기화 되어있으면 changed_at으로 sent_ts를 쓰고, 아니면 0.0(모른다.)
         """
+        ts = self._changed_ts(msg, retained)
+
         match msg:
             case m.SensorMessage():
                 if not self._config.is_enabled(msg.src_id):
                     return
-                self._apply_sensor(msg)
+                self._apply_sensor(msg, ts)
             case m.DeviceStateMessage():
                 if not self._config.is_enabled(msg.src_id):
                     return
-                self._apply_device_state(msg)
+                self._apply_device_state(msg, ts)
             case m.DeviceEventMessage():
                 if not self._config.is_enabled(msg.src_id):
                     return
-                self._apply_device_event(msg)
+                self._apply_device_event(msg)       # 이벤트는 retained 아님
             case m.NodeStatus():
+                if msg.src_id == "rpi5":
+                    return
                 self.nodes[msg.src_id] = msg.online
                 self.node_synced[msg.src_id] = msg.ts_synced
 
     # ------------------------------------------------------------ 센서
 
-    def _apply_sensor(self, msg: m.SensorMessage) -> None:
-        ts = msg.recv_ts
+    def _apply_sensor(self, msg: m.SensorMessage, changed_ts: float | None) -> None:
+        now = msg.recv_ts
 
         match msg:
             case m.PresenceMessage():
-                self._presence(msg, ts)
+                self._presence(msg, now, changed_ts)
             case m.MotionMessage():
                 st = self._get(msg.src_id, MotionState)
                 if msg.motion != st.motion or st.updated_at == 0.0:
                     st.motion = msg.motion
-                    st.changed_at = ts
-                    st.record(ts, msg.motion)
-                st.touch(ts)
+                    if changed_ts is not None:
+                        st.changed_at = changed_ts
+                    st.record(now, msg.motion)
+                st.touch(now)
             case m.DoorMessage():
                 st = self._get(msg.src_id, DoorState)
                 if msg.open != st.open or st.updated_at == 0.0:
                     st.open = msg.open
-                    st.changed_at = ts
-                    st.record(ts, msg.open)
-                st.touch(ts)
+                    if changed_ts is not None:
+                        st.changed_at = changed_ts
+                    st.record(now, msg.open)
+                st.touch(now)
             case m.BedMessage():
                 st = self._get(msg.src_id, BedState)
                 if msg.occupied != st.occupied or st.updated_at == 0.0:
                     st.occupied = msg.occupied
-                    st.changed_at = ts
-                    st.record(ts, msg.occupied)
-                st.touch(ts)
+                    if changed_ts is not None:
+                        st.changed_at = changed_ts
+                    st.record(now, msg.occupied)
+                st.touch(now)
             case m.PowerMessage():
-                self._power(msg, ts)
+                self._power(msg, now, changed_ts)
             case m.LightMessage():
                 st = self._get(msg.src_id, LightState)
                 st.lux = msg.illuminance_lux
-                st.record(ts, msg.illuminance_lux)
-                st.touch(ts)
+                st.record(now, msg.illuminance_lux)
+                st.touch(now)
             case m.ClimateMessage():
                 st = self._get(msg.src_id, ClimateState)
                 st.temperature_c = msg.temperature_c
                 st.humidity_pct = msg.humidity_pct
-                st.record(ts, msg.temperature_c)
-                st.touch(ts)
+                st.record(now, msg.temperature_c)
+                st.touch(now)
 
-    def _presence(self, msg: m.PresenceMessage, ts: float) -> None:
+    def _presence(
+            self, msg: m.PresenceMessage, now: float, changed_ts: float | None
+            ) -> None:
         """present 전환만 changed_at 을 갱신한다.
         """
         st = self._get(msg.src_id, PresenceState)
@@ -289,8 +300,9 @@ class WorldState:
 
         if msg.present != st.present or first:      #방금 도착한 메시지의 present값과 센서의 누적 상태(st)의 present가 다른경우
             st.present = msg.present
-            st.changed_at = ts
-            st.record(ts, msg.present)
+            if changed_ts is not None:
+                st.changed_at = changed_ts
+            st.record(now, msg.present)
 
         st.energy = msg.energy
         st.distance_cm = msg.distance_cm
@@ -298,27 +310,29 @@ class WorldState:
         """policy.toml의 [presence.energy] still_max = 10을 읽어와서, energy가 그 이하면 "정지 중"으로 봄"""
         still_max = float(self._config.value("presence", "energy", "still_max", default=10))
         if msg.present and msg.energy <= still_max:     #사람은 있는데 안 움직임 (mmWave 는 정지한 사람도 감지)
-            if st.still_since is None:
-                st.still_since = ts
+            if st.still_since is None and changed_ts is not None:
+                st.still_since = changed_ts
         else:
             st.still_since = None
 
-        st.touch(ts)        #updated_at 갱신
+        st.touch(now)        #updated_at 갱신
 
     # ------------------------------------------------------------ 전력
 
-    def _power(self, msg: m.PowerMessage, ts: float) -> None:
+    def _power(
+            self, msg: m.PowerMessage, now: float, changed_ts: float | None
+            ) -> None:
         """watt 를 OFF/STANDBY/ON 으로 판정한다.
         노드가 state 를 채워 보냈으면 그대로 쓴다 (명세: 선택 필드). 없을 때만 watt 와 policy 임계값으로 판정한다.
         """
         st = self._get(msg.src_id, PowerState)
         first = st.updated_at == 0.0        # 해당 센서에서 처음 온 메시지인지
         st.watt = msg.watt
-        st.record(ts, msg.watt)
-        st.touch(ts)
+        st.record(now, msg.watt)
+        st.touch(now)
 
         if msg.state is not None:       #수신한 메시지에 state가 채워져 있으면 그 값으로 업데이트
-            self._commit_power(st, msg.state, ts, first=first)
+            self._commit_power(st, msg.state, changed_ts, first=first)
             st.pending_state = None
             st.pending_since = None
             return
@@ -330,7 +344,7 @@ class WorldState:
             if first:
                 # 첫 수신은 전환이 아니라 초기 상태 확인이다.
                 # min_hold 를 기다릴 대상이 아니므로 바로 시각을 찍는다.
-                self._commit_power(st, target, ts, first=True)
+                self._commit_power(st, target, changed_ts, first=True)
             elif st.pending_state is not None:      #첫 수신은 아님 / 후보 상태가 존재함
                 # 후보가 있었다면 조건이 깨진 것 — 스파이크였다
                 st.pending_state = None     #후보 상태 비우기
@@ -343,10 +357,14 @@ class WorldState:
 
         # 목표 state가 현재 state 및 pending_state와 다른 경우
         # 새 후보. min_hold_sec 지속돼야 확정한다.
+        if changed_ts is None:
+            self._commit_power(st, target, None)
+            return
+
         st.pending_state = target
-        st.pending_since = ts
+        st.pending_since = changed_ts
         self._sched.at(     #전력 확정 대기 타이머 등록
-            ts + rule.min_hold_sec,
+            now + rule.min_hold_sec,
             lambda vid=msg.src_id: self._confirm_power(vid),
             key=self._power_key(msg.src_id),
         )
@@ -365,14 +383,17 @@ class WorldState:
         st.pending_since = None
 
     def _commit_power(
-        self, st: PowerState, state: str, changed_at: float, *, first: bool = False
+        self, st: PowerState, state: str, changed_at: float | None, *, first: bool = False
     ) -> None:
         """first 는 첫 수신. 값이 기본값과 같아도 changed_at 을 찍어야 함(안 찍으면 changed_at 이 0.0 에 머물러 state_sec() 이 17억 초를 돌려주게 됨)
         """
         if st.state == state and not first:     #state 값 변화가 없고, 첫 메시지가 아닌 경우 바로 반환
             return
         st.state = state
-        st.changed_at = changed_at      # 확정 시각이 아니라 후보가 된 시각
+        if changed_at is not None:
+            st.changed_at = changed_at      # 확정 시각이 아니라 후보가 된 시각
+            if state == "ON":
+                st.on_since = changed_at
         log.debug("전력 %s → %s (t=%s)", st.vid, state, changed_at)
 
     @staticmethod
@@ -396,8 +417,8 @@ class WorldState:
 
     # ------------------------------------------------------------ 가전
 
-    def _apply_device_state(self, msg: m.DeviceStateMessage) -> None:
-        ts = msg.recv_ts
+    def _apply_device_state(self, msg: m.DeviceStateMessage, changed_ts: float | None) -> None:
+        now = msg.recv_ts
         st = self.devices.get(msg.src_id)
         if st is None:      #해당 가전에 대한 첫 수신 메시지
             st = DeviceState(vid=msg.src_id, device_type=msg.device_type)
@@ -408,11 +429,12 @@ class WorldState:
         prev = _primary(st.device_type, st.fields)      #기존에 저장돼 있던 직전 주 상태
 
         if marker != prev or st.updated_at == 0.0:      #수신한 상태와 기존 상태가 다르면 changed_at 갱신
-            st.changed_at = ts
-            st.history.append((ts, marker))
+            if changed_ts is not None:
+                st.changed_at = changed_ts
+            st.history.append((now, marker))
 
         st.fields = fields
-        st.updated_at = ts
+        st.updated_at = now
 
     def _apply_device_event(self, msg: m.DeviceEventMessage) -> None:
         ts = msg.recv_ts
@@ -430,13 +452,14 @@ class WorldState:
 
     def dwell_sec(self, area: str) -> float:
         """그 구역의 재실 센서가 present 로 바뀐 뒤 경과. (재실 경과 시간 반환)
-        여러 센서가 있으면 가장 오래된 것을 쓴다 — 주방 mmWave 와 PIR 이 따로 반응해도 체류는 하나다.
+           여러 센서가 있으면 가장 오래된 것을 쓴다 — 주방 mmWave 와 PIR 이 따로 반응해도 체류는 하나다.
+           changed_at이 0.0이면 retained(전환 시각 모름)
         """
         now = self._clock.now()
         spans = [
             s.state_sec(now)
             for s in self.sensors_of(area)
-            if isinstance(s, PresenceState) and s.present       #해당 area의 센서들 중 presence 센서에 대해
+            if isinstance(s, PresenceState) and s.present and s.changed_at > 0.0       #해당 area의 센서들 중 presence 센서에 대해
         ]
         return max(spans) if spans else 0.0
 
@@ -498,6 +521,32 @@ class WorldState:
             self.sensors[vid] = st
         return st
 
+
+    # retained 의 sent_ts 를 믿을 수 있는 최대 나이.
+    # 이보다 오래된 것은 노드가 오래 죽어 있었다는 뜻이라 쓰지 않는다.
+    RETAINED_MAX_AGE_SEC = 86400
+
+    def _changed_ts(self, msg: m.Message, retained: bool) -> float | None:
+        """changed_at 에 찍을 시각. None 이면 찍지 않는다.
+            노드가 NTP 동기화돼 있으면 sent_ts 를 쓰고, 아니면 찍지 않는다.
+            changed_at 이 0.0 으로 남으면 각 판정이 '모른다' 로 다룬다.
+        """
+        if not retained:
+            return msg.recv_ts
+
+        node = self._config.sensor(msg.src_id)
+        node_id = node.node if node else None
+        if node_id is None or not self.node_synced.get(node_id, False):
+            return None                      # 절대시각으로 해석할 수 없다 (명세)
+
+        sent = msg.sent_ts
+        if sent <= 0 or sent > msg.recv_ts:
+            return None                      # 미래 시각은 시계가 틀어진 것
+        if msg.recv_ts - sent > self.RETAINED_MAX_AGE_SEC:
+            return None                      # 너무 오래된 값
+        return sent
+    
+
     def __repr__(self) -> str:
         return f"WorldState(sensors={len(self.sensors)}, devices={len(self.devices)})"
 
@@ -548,3 +597,5 @@ def _event_type(msg: m.DeviceEventMessage) -> str:
             out.append("_")
         out.append(ch.lower())
     return "".join(out)
+
+
