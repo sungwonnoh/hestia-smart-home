@@ -239,6 +239,7 @@ open_states = ["MEAL_PREP", "EATING"]   # KITCHEN_MISC 는 열지 않는다 (물
 close_grace_sec = 600                   # 묶음 상태를 벗어난 뒤 이만큼 지나면 닫는다
 min_duration_sec = 120                  # 이보다 짧으면 기록하지 않는다
 session_timeout_sec = 7200              # 강제 종료 (2시간)
+cooking_lookback_sec = 7200
 
 [fsm.wake]
 # activity 는 '지금'이고 wake 는 '오늘 하루의 누적'이다. 시간 스케일이 달라

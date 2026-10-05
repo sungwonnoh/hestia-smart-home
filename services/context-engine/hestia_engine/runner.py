@@ -85,24 +85,17 @@ class Runner:
     # ------------------------------------------------------------ 생애
 
     def start(self) -> None:
-        """브로커가 늦게 기동해도 무한 재시도한다 (명세).
-
-        connect_async 라 브로커가 없어도 기동하고, 올라오면 붙는다.
-        부팅 순서 의존성을 없애기 위해서다.
-        """
+        """브로커가 늦게 기동해도 무한 재시도한다 (명세)."""
         self._running = True
-        self.client.connect_async(self._host, self._port, keepalive=60)
-        log.info("브로커 연결 시도: %s:%s", self._host, self._port)
+        try:
+            self.client.connect(self._host, self._port, keepalive=60)
+            log.info("브로커 연결: %s:%s", self._host, self._port)
+        except OSError as exc:
+            log.warning("브로커 연결 실패 (%s) — 루프에서 재시도한다", exc)
+            self.client.connect_async(self._host, self._port, keepalive=60)
 
     def run(self) -> None:
-        """메시지와 타이머를 번갈아 처리한다.
-
-        loop_forever 를 쓰지 않는 이유: 블로킹이라 그 틈에 타이머를
-        돌릴 수 없다. 시간 경과로만 성립하는 전이(PIR 타임아웃, AWAY,
-        쿨다운 해제, 기상 후 N분)가 전부 묻힌다.
-
-        단일 스레드라 WorldState·Scheduler·NotifyStore 에 락이 없다.
-        """
+        """메시지와 타이머를 번갈아 처리한다."""
         self.start()
         while self._running:
             try:
@@ -116,10 +109,7 @@ class Runner:
                 time.sleep(LOOP_TIMEOUT_SEC)
 
     def stop(self) -> None:
-        """계획된 종료. LWT 대신 online=false 를 스스로 발행한다.
-
-        그래야 대시보드가 '꺼진 것' 과 '죽은 것' 을 구별할 수 있다.
-        """
+        """계획된 종료. LWT 대신 online=false 를 스스로 발행한다."""
         if not self._running:
             return
         self._running = False
@@ -177,11 +167,7 @@ class Runner:
             log.warning("연결 끊김 rc=%s — 재연결 대기", reason_code)
 
     def _on_message(self, client, userdata, msg) -> None:
-        """retain 플래그를 그대로 넘긴다.
-
-        브로커가 보관하던 값은 recv_ts 가 재연결 시각일 뿐이다.
-        엔진이 그것을 구별해 changed_at 처리를 달리한다.
-        """
+        """retain 플래그를 그대로 넘긴다."""
         try:
             self.engine.ingest(msg.topic, msg.payload, retained=bool(msg.retain))
         except Exception:                             # noqa: BLE001
@@ -212,11 +198,7 @@ class Runner:
 
 
 def build(argv: argparse.Namespace) -> Runner:
-    """설정을 읽어 Runner 를 만든다.
-
-    검증 실패는 기동 거부다 — 잘못된 매핑으로 도는 것보다
-    안 뜨는 편이 낫다.
-    """
+    """설정을 읽어 Runner 를 만든다."""
     root = Path(os.environ.get("HESTIA_CONFIG", argv.config))
     config = load(
         root / "homes" / f"{argv.home}.toml",
@@ -239,7 +221,10 @@ def build(argv: argparse.Namespace) -> Runner:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # 인자 파서 구성, ArgumentParser: 명령줄 인자를 받는 객체
     parser = argparse.ArgumentParser(description="HESTIA Context Engine")
+
+    # 인자 일곱개
     parser.add_argument(
         "--config",
         default=os.environ.get("HESTIA_CONFIG", "/data/hestia/config"),
@@ -251,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data", default=os.environ.get("HESTIA_DATA", "/data/hestia"))
     parser.add_argument("--profile", choices=("REAL", "DEMO"))
     parser.add_argument("-v", "--verbose", action="store_true")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(argv)      # 실제로 파싱
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -259,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        runner = build(args)
+        runner = build(args)        # build()가 설정을 읽고 Runner 객체를 만듦
     except ConfigError as exc:
         log.error("설정 오류 — 기동하지 않는다: %s", exc)
         return 1
@@ -268,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, lambda *_: runner.stop())
     signal.signal(signal.SIGINT, lambda *_: runner.stop())
 
-    runner.run()
+    runner.run()        # run() 안에서 start()를 호출하고 무한 루프를 돈다.
     return 0
 
 

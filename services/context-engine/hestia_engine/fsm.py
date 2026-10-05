@@ -173,7 +173,6 @@ class MealFSM:
                     return timers
                 if not self._open(state, now):
                     return timers       # 근거 시각이 없어 열지 못함
-                self._open(state, now)
             elif now - self.session.t0 >= self._timeout():
                 # 2시간째 조리 중일 리 없다. 센서가 켜진 채 방치됐거나
                 # 판정이 고착된 것이다. 닫되 새로 열지 않는다.
@@ -203,9 +202,12 @@ class MealFSM:
         if now - self.session.t0 >= self._timeout():
             self._close(now, use_now=True)
             self._timed_out = True
-        elif idle >= grace:
+        elif idle >= grace and not self._cooking():
             # 묶음은 last_active_at 에 끝났고 우리가 grace 만큼 기다린 것뿐이다
+            # 단 조리 중(인덕션 불켜짐)이면 닫지 않는다 (끓이는 동안 자리 비움 상황)
             self._close(now)
+        elif self._cooking():
+            timers.append(("meal-close", now + grace))
         else:
             timers.append(("meal-close", self.session.last_active_at + grace))
 
@@ -223,9 +225,7 @@ class MealFSM:
 
     # ------------------------------------------------------------ 내부
 
-    def _open(self, state: str, now: float) -> None:
-        t0 = self._evidence_t0(state, now)
-
+    def _open(self, state: str, now: float) -> bool:
         #근거 시각을 찾지 못하면 열지 않음
         t0 = self._evidence_t0(state, now)
         if t0 is None:
@@ -268,15 +268,19 @@ class MealFSM:
         인덕션을 켠 것은 09:20:00 이고 MEAL_PREP 판정은 그 뒤다.
         판정 시각을 쓰면 t0 가 밀리고 KDE 분포가 통째로 틀어진다.
         """
-        if state == "MEAL_PREP":
-            # 조리 기구가 켜진 시각 — World State 가 후보 시각으로 들고 있다
-            starts = [
-                st.changed_at
-                for st in self._world.sensors_by_role("MEAL")
-                if isinstance(st, PowerState) and st.state == "ON" and st.changed_at > 0.0
-            ]
-            if starts:
-                return min(starts)
+        lookback = float(
+            self._config.value("fsm", "meal", "cooking_lookback_sec", default=7200)
+        )
+
+        starts = [
+            st.on_since
+            for st in self._world.sensors_by_role("MEAL")
+            if isinstance(st, PowerState)
+            and st.on_since is not None
+            and now - st.on_since <= lookback
+        ]
+        if starts:
+            return min(starts)
 
         # EATING 으로 바로 열렸거나 전력 근거가 없으면 주방 체류 시작 시각
         dwell = self._world.dwell_sec("kitchen")
@@ -288,6 +292,11 @@ class MealFSM:
     def _timeout(self) -> float:
         return float(self._config.value("fsm", "meal", "session_timeout_sec", default=7200))
 
+    def _cooking(self) -> bool:
+        """조리 기구가 켜져 있는가.
+            불이 켜져 있는 동안은 그 식사가 조리가 진행 중
+        """
+        return self._world.any_power_on("MEAL")
 
 # ==================================================================== wake FSM
 
@@ -494,7 +503,7 @@ class WakeFSM:
         end = int(self._config.value("fsm", "wake", "latest_hour", default=12))
         return start <= hour < end
 
-    def _bed_left_at(self) -> float | None:
+    def _bed_left_at(self) -> float | tuple[float | None, bool]:
         """침대를 떠난 시각, 침대 센서가 있는가
            센서가 없는 집과 retained 라 시각을 모르는 경우를 구별한다.
 

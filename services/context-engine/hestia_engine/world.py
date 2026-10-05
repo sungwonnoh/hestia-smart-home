@@ -109,6 +109,7 @@ class PowerState(SensorState):
     watt: float = 0.0
     state: str = "OFF"
     changed_at: float = 0.0     #pending_state가 변화한 시각
+    on_since: float | None = None           #마지막으로 ON이 된 시각
     pending_state: str | None = None        #검증을 위해 대기 중인 다음 상태 후보
     pending_since: float | None = None      #pending_state 대기 열에 들어간 시각
 
@@ -237,6 +238,8 @@ class WorldState:
                     return
                 self._apply_device_event(msg)       # 이벤트는 retained 아님
             case m.NodeStatus():
+                if msg.src_id == "rpi5":
+                    return
                 self.nodes[msg.src_id] = msg.online
                 self.node_synced[msg.src_id] = msg.ts_synced
 
@@ -389,6 +392,8 @@ class WorldState:
         st.state = state
         if changed_at is not None:
             st.changed_at = changed_at      # 확정 시각이 아니라 후보가 된 시각
+            if state == "ON":
+                st.on_since = changed_at
         log.debug("전력 %s → %s (t=%s)", st.vid, state, changed_at)
 
     @staticmethod
@@ -447,13 +452,14 @@ class WorldState:
 
     def dwell_sec(self, area: str) -> float:
         """그 구역의 재실 센서가 present 로 바뀐 뒤 경과. (재실 경과 시간 반환)
-        여러 센서가 있으면 가장 오래된 것을 쓴다 — 주방 mmWave 와 PIR 이 따로 반응해도 체류는 하나다.
+           여러 센서가 있으면 가장 오래된 것을 쓴다 — 주방 mmWave 와 PIR 이 따로 반응해도 체류는 하나다.
+           changed_at이 0.0이면 retained(전환 시각 모름)
         """
         now = self._clock.now()
         spans = [
             s.state_sec(now)
             for s in self.sensors_of(area)
-            if isinstance(s, PresenceState) and s.present       #해당 area의 센서들 중 presence 센서에 대해
+            if isinstance(s, PresenceState) and s.present and s.changed_at > 0.0       #해당 area의 센서들 중 presence 센서에 대해
         ]
         return max(spans) if spans else 0.0
 

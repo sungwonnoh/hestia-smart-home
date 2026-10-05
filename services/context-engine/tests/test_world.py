@@ -723,3 +723,49 @@ def test_live_message_uses_recv_ts(ctx):
         "type": "power", "watt": 1180, "state": "ON",
     })
     assert world.sensor("vs-03").changed_at == clock.now()
+
+def test_power_on_since_survives_off(ctx):
+    """조리가 끝나도 켠 시각은 남는다 — 묶음의 t0 가 그것이다."""
+    clock, _, world = ctx
+    feed(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": 0, "src_id": "vs-03", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    })
+    on_at = clock.now()
+
+    clock.advance_by(600)
+    feed(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": 0, "src_id": "vs-03", "seq": 2,
+        "type": "power", "watt": 3, "state": "STANDBY",
+    })
+
+    st = world.sensor("vs-03")
+    assert st.state == "STANDBY"
+    assert st.changed_at == clock.now()      # 지금 상태가 된 시각
+    assert st.on_since == on_at              # 켠 시각은 그대로
+
+
+def test_power_on_since_updates_on_restart(ctx):
+    """다시 켜지면 갱신된다."""
+    clock, _, world = ctx
+    for seq, (watt, state) in enumerate(
+        [(1180, "ON"), (3, "STANDBY"), (1180, "ON")], start=1
+    ):
+        feed(ctx, "hestia/sensor/vs-03/state", {
+            "version": 1, "sent_ts": 0, "src_id": "vs-03", "seq": seq,
+            "type": "power", "watt": watt, "state": state,
+        })
+        clock.advance_by(300)
+
+    assert world.sensor("vs-03").on_since == clock.now() - 300
+
+
+def test_retained_power_has_no_on_since(ctx):
+    """언제 켰는지 모르면 남기지 않는다."""
+    _, _, world = ctx
+    node_status(ctx, "esp32-2", synced=False)
+    feed_retained(ctx, "hestia/sensor/vs-03/state", {
+        "version": 1, "sent_ts": 1000, "src_id": "vs-03", "seq": 1,
+        "type": "power", "watt": 1180, "state": "ON",
+    })
+    assert world.sensor("vs-03").on_since is None

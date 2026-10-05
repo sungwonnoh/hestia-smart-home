@@ -175,10 +175,10 @@ class ActivityEvaluator:
                 awake += w("IN_BED_AWAKE", "not_night")
             s["IN_BED_AWAKE"] = awake
 
-        elif bed is not None and not bed.occupied:
+        elif bed is not None and not bed.occupied and bed.changed_at > 0.0:
             # 침대를 떠난 직후 — WAKING.
-            # 야간에는 성립하지 않는다. 새벽에 화장실 다녀오는 것은
-            # 기상이 아니라 수면의 일부다.
+            # 야간에는 성립하지 않는다. 새벽에 화장실 다녀오는 것은 기상이 아니라 수면의 일부다.
+            # 전환 시각을 모르면(retained) 판정하지 않음
             left_sec = now - bed.changed_at
             confirm = float(self._config.value("activity", "sleep", "wake_confirm_sec", default=300))
             factors["bed_left_sec"] = round(left_sec)

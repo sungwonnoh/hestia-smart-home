@@ -505,3 +505,33 @@ def test_power_after_restart_opens_normally(c):
     c.at(MORNING + 300).power("vs-06", 1180, "ON")
 
     assert c.meal.t0 == MORNING + 300
+
+def test_t0_is_cooking_start_even_when_opened_as_eating(c):
+    """MEAL_PREP 판정이 잠깐 떴다 사라져도 t0 는 인덕션을 켠 때다.
+
+    실기기에서 조리가 짧으면 MEAL_PREP 이 발행되기 전에 꺼진다.
+    그때 EATING 으로 묶음이 열리는데, 주방 체류 시작을 t0 로 쓰면
+    분포가 밀린다.
+    """
+    c.presence("vs-04", True)                       # 주방 진입
+    c.at(MORNING + 100).power("vs-06", 1180, "ON")  # 조리 시작
+    c.at(MORNING + 110).power("vs-06", 3, "STANDBY")  # 10초 만에 종료
+    c.at(MORNING + 400).presence("vs-04", True, energy=12)
+
+    assert c.engine.activity.state == "EATING"
+    assert c.meal.t0 == MORNING + 100               # 주방 진입(MORNING)이 아니다
+
+
+def test_old_cooking_is_not_t0(c):
+    """어제 켠 기록이 오늘 식사의 t0 가 되면 안 된다."""
+    c.presence("vs-04", True)
+    c.at(MORNING + 100).power("vs-06", 1180, "ON")
+    c.at(MORNING + 200).power("vs-06", 3, "STANDBY")
+
+    # lookback 7200 을 넘긴다
+    c.at(MORNING + 8000).presence("vs-04", False)
+    c.at(MORNING + 9000).presence("vs-04", True)
+    c.at(MORNING + 9500).presence("vs-04", True, energy=12)
+
+    if c.meal.t0 is not None:
+        assert c.meal.t0 > MORNING + 8000
