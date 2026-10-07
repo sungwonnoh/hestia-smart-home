@@ -164,14 +164,17 @@ class Controller:
         """사용자가 명령을 되돌렸는가.
         """
         cmd = self._last.get(target)
-        if cmd is None:     # 해당 기기에 명령한 적 없음
+        if cmd is None:
             return False
-        if cmd.action in EMPTY_PARAM_ACTIONS:       # EMPTY_PARAM_ACTIONS(start/stop/dock)의 경우 params가 비어있음-> 되돌릴 값 없음
-            return self._action_reverted(target, cmd)
 
-        st = self._world.device(target)         # 해당 가전의 state
+        st = self._world.device(target)
         if st is None:
             return False
+        if st.updated_at <= cmd.sent_at:
+            return False                    # 아직 실행 전의 보고다
+
+        if cmd.action in EMPTY_PARAM_ACTIONS:
+            return self._action_reverted(target, cmd)
 
         for key, want in cmd.params.items():
             if key == TRANSITION_KEY:

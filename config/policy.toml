@@ -311,6 +311,17 @@ comply_window_min = 10
 title = "확인이 필요합니다"
 text = "괜찮으신가요?"
 
+[notify.SLEEP_ROUTINE]
+affinity = ["smart_tv", "display_node"]
+priority = "low"
+# 무응답이 신호.
+requires_ack = false
+expiry_sec = 300
+cooldown_sec = 0
+comply_window_min = 0
+title = "확인"
+text = "지금 일어나계신가요?"
+
 
 # ============================================================ 총량 제한
 #
@@ -320,6 +331,7 @@ text = "괜찮으신가요?"
 max_per_day = 8
 min_interval_sec = 1800
 quiet_hours = { start = "22:00", end = "07:00" }   # 음성 채널 금지 시간대
+exempt_scenarios = ["SLEEP_ROUTINE"]               # SLEEP_ROUTINE 알림은 총량 제한에서 제외
 
 
 # ============================================================ 관측 창
@@ -367,6 +379,17 @@ interval_sec = 300
 # 화장실부터 가는 사람도 있다. 그 사이에 물으면 성가시기만 하다.
 hydration_grace_sec = 900
 recheck_sec = 300
+
+
+[scenarios.sleep]
+# 15분 정지하면 프로브
+still_sec = 900
+# 무응답 판정(1분)
+probe_timeout_sec = 60
+states = ["RESTING", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"]
+# 조명 프로브로 내릴 밝기. 
+probe_brightness = 70
+probe_transition_ms = 30000
 
 # ============================================================ 안전
 #

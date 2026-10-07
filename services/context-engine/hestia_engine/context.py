@@ -898,6 +898,12 @@ class ContextEngine:
         """알림 층이 발송 직후 부른다."""
         self._suppression_eval.note_notification(scenario)
 
+
+    @property
+    def suppression_eval(self):
+        """시나리오가 프로브를 걸 때 쓴다."""
+        return self._suppression_eval
+
     # ------------------------------------------------------------ 타이머
 
     def _arm(self, key: str, at: float) -> None:

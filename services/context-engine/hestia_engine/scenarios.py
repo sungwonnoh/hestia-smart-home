@@ -16,19 +16,47 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Callable
+from datetime import datetime
+from dataclasses import dataclass, field
+
+from .control import Controller
+from .timeutil import KST, day_key, hhmm
 
 from .clock import Clock
 from .config import Config
 from .notify import Notifier
 from .world import PresenceState, WorldState
 from .policy import Decision, InterventionPolicy
-from .timeutil import day_key
 from .control import Controller
 
 log = logging.getLogger(__name__)
 
 SRC_ID = "rpi5"
 SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True, slots=True)
+class SleepProbe:
+    """진행 중인 취침 확인."""
+
+    method: str                      # banner / dim
+    area: str | None
+    started_at: float
+    deadline: float                  # 이 시각까지 무반응이면 잠든 것
+    still_sec: float                 # 프로브 시점의 정지 시간
+    notify_id: str | None = None     # banner 일 때
+    target: str | None = None        # dim 일 때 조명 vid
+    before: int | None = None        # 내리기 전 밝기. 깨면 되돌린다
+
+
+@dataclass(frozen=True, slots=True)
+class AsleepState:
+    """확정된 수면."""
+
+    since: float
+    area: str | None                 # 어디서 잠들었나. 제어 대상을 정한다
+    nap: bool                        # 낮잠이면 제어하지 않는다
+    decision_id: str | None = None
 
 
 class ScenarioRunner:
@@ -45,6 +73,7 @@ class ScenarioRunner:
         notifier: Notifier,
         controller: Controller,
         publish: Callable[[str, dict[str, Any], bool], None],
+        suppression: Any = None,
     ) -> None:
         self._clock = clock
         self._config = config
@@ -53,21 +82,254 @@ class ScenarioRunner:
         self._notifier = notifier
         self._controller = controller
         self._publish = publish
+        self._suppression = suppression
 
         # 직전 판정. candidate 나 reason 이 바뀔 때만 발행한다 —
         # 판정은 context 가 바뀔 때마다 일어나므로 매번 발행하면 과함.
         self._last: dict[str, tuple[bool, str]] = {}
+        self._probe: SleepProbe | None = None
+        self.asleep: AsleepState | None = None
         self._seq = 0
 
-    def tick(self, context: Any) -> None:
+    def tick(self, context: Any) -> list[tuple[str, float]]:
         """시나리오를 전부 훑는다. 조건에 안 맞으면 조용히 지나간다."""
         timers: list[tuple[str, float]] = []
-        if context.away is None or context.suppression is None:
-            return timers
-        timers += self._safety(context)
         timers += self._wake_routine(context)
+        timers += self._safety(context)
+        timers += self._sleep_routine(context)
         return timers
 
+
+     # ------------------------------------------------------------ SLEEP_ROUTINE
+
+    def _sleep_routine(self, context) -> list[tuple[str, float]]:
+        """자는지 확인한다."""
+        now = self._clock.now()
+
+        if self._probe is not None:
+            return self._check_probe(context, now)
+
+        if self.asleep is not None:
+            # 확정된 뒤에는 깰 때까지 다시 묻지 않는다
+            if self._woke_up():
+                self.asleep = None
+            return []
+
+        area = self._sleep_area(context)
+        if area is None:
+            return []
+
+        limit = float(self._sleep_value("still_sec", 900))
+        since = self._still_since(area)
+        if since is None:
+            return []                       # 움직이는 중
+
+        still = now - since
+        if still < limit:
+            return [("sleep-probe", since + limit)]
+
+        return self._send_probe(context, area, still, now)
+
+
+    def _sleep_area(self, context) -> str | None:
+        """자는지 확인할 만한 상태인가. 그렇다면 어느 구역인가."""
+        states = tuple(self._sleep_value(
+            "states",
+            ["RESTING", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"],
+        ))
+        activity = getattr(context, "activity", None)
+        if activity is None or activity.state not in states:
+            return None
+        if activity.area:
+            return activity.area
+        presence = getattr(context, "presence", None)
+        return presence.user_area if presence is not None else None
+
+
+    # 프로브 발송
+    def _send_probe(
+        self, context, area: str, still: float, now: float
+    ) -> list[tuple[str, float]]:
+        timeout = float(self._sleep_value("probe_timeout_sec", 60))
+
+        # 프로브 중에는 다른 알림을 막는다.
+        if self._suppression is not None:
+            self._suppression.start_probe(stage=1, duration_sec=timeout)
+
+        probe = (
+            self._probe_banner(context, area, still, now, timeout)
+            if self._tv_on(area)
+            else self._probe_dim(area, still, now, timeout)
+        )
+        if probe is None:
+            self._end_probe()
+            return []
+
+        self._probe = probe
+        return [("sleep-probe", probe.deadline)]
+    
+
+    def _probe_banner(
+        self, context, area: str, still: float, now: float, timeout: float
+    ) -> SleepProbe | None:
+        """TV 가 켜져 있으면 묻는다."""
+        notify_id = self._notifier.send(
+            scenario="SLEEP_ROUTINE",
+            title=str(self._notify_value("SLEEP_ROUTINE", "title", "확인")),
+            text=str(self._notify_value(
+                "SLEEP_ROUTINE", "text", "지금 일어나계신가요?"
+            )),
+            priority=str(self._notify_value("SLEEP_ROUTINE", "priority", "low")),
+            presence=getattr(context, "presence", None),
+            suppression=getattr(context, "suppression", None),
+        )
+        if notify_id is None:
+            return None
+        return SleepProbe(
+            method="banner", area=area, started_at=now,
+            deadline=now + timeout, still_sec=still, notify_id=notify_id,
+        )
+
+    def _probe_dim(
+        self, area: str, still: float, now: float, timeout: float
+    ) -> SleepProbe | None:
+        """V 가 꺼져 있으면 배너를 띄울 근거가 없다. 조명을 한 단계 내려 반응을 본다.
+        """
+        lights = self._controller.devices_of_type("smart_light", area)
+        if not lights:
+            return None
+
+        target = lights[0]
+        st = self._world.device(target)
+        if st is None or st.get("power") != "ON":
+            return None                     # 꺼진 조명은 내릴 수 없다
+
+        before = st.get("brightness")
+        level = int(self._sleep_value("probe_brightness", 70))
+        if before is not None and int(before) <= level:
+            return None                     # 이미 그보다 어둡다
+
+        self._controller.set(
+            target,
+            power="ON",
+            brightness=level,
+            transition_ms=int(self._sleep_value("probe_transition_ms", 30000)),
+            reason="SLEEP_ROUTINE",
+            priority="low",
+        )
+        return SleepProbe(
+            method="dim", area=area, started_at=now,
+            deadline=now + timeout, still_sec=still,
+            target=target, before=int(before) if before is not None else None,
+        )
+
+
+    # 응답 확인
+    def _check_probe(self, context, now: float) -> list[tuple[str, float]]:
+        """반응이 있었나, 시간이 다 됐나."""
+        probe = self._probe
+        assert probe is not None
+
+        if self._responded(probe):
+            self._end_probe()
+            self._probe = None
+            self._restore(probe)
+            self._emit_sleep_decision(probe, asleep=False, now=now)
+            return []
+
+        if now < probe.deadline:
+            return [("sleep-probe", probe.deadline)]
+
+        # 무반응 — 잠든 것으로 본다
+        self._end_probe()
+        self._probe = None
+        decision_id = self._emit_sleep_decision(probe, asleep=True, now=now)
+        self.asleep = AsleepState(
+            since=probe.started_at,
+            area=probe.area,
+            nap=self._is_nap(),
+            decision_id=decision_id,
+        )
+        return []
+
+    def _responded(self, probe: SleepProbe) -> bool:
+        """깨어 있다는 증거. 누르거나 움직이거나 되돌렸다."""
+        if probe.notify_id is not None:
+            pending = self._notifier.store.get(probe.notify_id)
+            if pending is not None and pending.acked:
+                return True
+        if probe.target is not None and self._controller.reverted(probe.target):
+            return True
+        if probe.area is not None and self._still_since(probe.area) is None:
+            return True                     # 움직였다
+        return False
+
+    def _restore(self, probe: SleepProbe) -> None:
+        """조명 프로브를 되돌린다.
+        """
+        if probe.method != "dim" or probe.target is None or probe.before is None:
+            return
+        if self._controller.reverted(probe.target):
+            return
+        self._controller.set(
+            probe.target, power="ON", brightness=probe.before,
+            reason="SLEEP_ROUTINE", priority="low",
+        )
+
+    def _end_probe(self) -> None:
+        if self._suppression is not None:
+            self._suppression.end_probe()
+
+    # decision과 헬퍼
+    def _emit_sleep_decision(
+        self, probe: SleepProbe, *, asleep: bool, now: float
+    ) -> str | None:
+        decision = Decision(
+            kind="sleep",
+            candidate=asleep,
+            reason="ASLEEP_CONFIRMED" if asleep else "AWAKE",
+            confidence=1.0 if asleep else 0.0,
+            factors={
+                "area": probe.area,
+                "method": probe.method,
+                "still_sec": round(probe.still_sec),
+                "probe_sec": round(now - probe.started_at),
+                "nap": self._is_nap(),
+            },
+        )
+        return self._emit_decision(decision)
+
+    def _is_nap(self) -> bool:
+        """낮잠과 밤잠을 가른다."""
+        window = self._config.value("limits", "quiet_hours", default=None)
+        if not window:
+            return False
+        now = datetime.fromtimestamp(self._clock.now(), KST)
+        minutes = now.hour * 60 + now.minute
+        start = hhmm(str(window.get("start", "22:00")))
+        end = hhmm(str(window.get("end", "07:00")))
+        night = (
+            start <= minutes < end if start <= end
+            else minutes >= start or minutes < end
+        )
+        return not night
+
+    def _woke_up(self) -> bool:
+        """확정을 푼다. 움직이면 깬 것이다."""
+        if self.asleep is None or self.asleep.area is None:
+            return True
+        return self._still_since(self.asleep.area) is None
+
+    def _tv_on(self, area: str) -> bool:
+        for vid in self._controller.devices_of_type("smart_tv", area):
+            st = self._world.device(vid)
+            if st is not None and st.get("power") == "ON":
+                return True
+        return False
+
+    def _sleep_value(self, key: str, default: Any) -> Any:
+        return self._config.value("scenarios", "sleep", key, default=default)
+    
 
     # ------------------------------------------------------------ SAFETY
 

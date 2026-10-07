@@ -161,7 +161,8 @@ class Engine:
         )
 
         self.scenarios = ScenarioRunner(
-            clock, config, world, self.policy, self.notifier, controller=self.controller, publish=self._publish_raw
+            clock, config, world, self.policy, self.notifier, controller=self.controller, publish=self._publish_raw,
+            suppression=self.context._suppression_eval,
         )
 
         self.received = 0

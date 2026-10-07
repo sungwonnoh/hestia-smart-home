@@ -116,6 +116,11 @@ area = "living"
 id = "vd-09"
 device_type = "robot_cleaner"
 area = "living"
+
+[[devices]]
+id = "vd-11"
+device_type = "smart_light"
+area = "bedroom"
 """
 
 POLICY = (Path(__file__).parents[3] / "config" / "policy.toml").read_text(encoding="utf-8")

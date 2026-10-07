@@ -24,7 +24,7 @@ from .clock import Clock
 from .config import Config
 from .context import PresenceContext, SuppressionContext
 from .timers import Scheduler
-from .timeutil import KST, day_key
+from .timeutil import KST, day_key, hhmm
 from .world import WorldState
 
 log = logging.getLogger(__name__)
@@ -241,8 +241,8 @@ class ChannelSelector:
             return False
         now = datetime.fromtimestamp(self._clock.now(), KST)
         minutes = now.hour * 60 + now.minute        # 현재 시각을 분으로
-        start = _hhmm(window.get("start", "22:00"))
-        end = _hhmm(window.get("end", "07:00"))
+        start = hhmm(window.get("start", "22:00"))
+        end = hhmm(window.get("end", "07:00"))
         if start <= end:
             return start <= minutes < end
         return minutes >= start or minutes < end    # 자정을 넘는 창
@@ -251,10 +251,6 @@ class ChannelSelector:
         """Config 가 default 위에 시나리오 항목을 얹고 DEMO 배수까지 적용한다."""
         return self._config.notify_policy(scenario).get(key, default)
 
-
-def _hhmm(value: str) -> int:
-    hour, minute = value.split(":")
-    return int(hour) * 60 + int(minute)
 
 
 # ==================================================================== 총량 제한
@@ -273,12 +269,12 @@ class NotifyLimits:
         self._count = 0
         self._last_sent_at: float | None = None
 
-    def allows(self, priority: str) -> tuple[bool, str | None]:
+    def allows(self, priority: str, scenario: str = "") -> tuple[bool, str | None]:
         """(보내도 되는가, 안 되는 이유)."""
         now = self._clock.now()
         self._roll_day(now)
 
-        if priority == "health":
+        if priority == "health" or self.is_exempt(scenario):
             return True, None                   # 폐기하지 않는다
 
         # 하루 최대 알림 수 초과
@@ -292,6 +288,14 @@ class NotifyLimits:
             return False, "MIN_INTERVAL"
 
         return True, None
+
+
+    def is_exempt(self, scenario: str) -> bool:
+        """총량 제한에서 빠지는가."""
+        return scenario in tuple(
+            self._config.value("limits", "exempt_scenarios", default=[])
+        )
+    
 
     def note_sent(self) -> None:        # 오늘 알림을 몇 건 보냈는지, 마지막으로 언제 보냈는지 기록
         now = self._clock.now()
@@ -371,7 +375,7 @@ class Notifier:
             log.debug("%s 억제됨 (%s)", scenario, suppression.reason)
             return None
 
-        ok, why = self.limits.allows(priority)      # 알림 총량 조건에서, (현재 알림을 보낼 수 있는지, 그 이유)
+        ok, why = self.limits.allows(priority, scenario)      # 알림 총량 조건에서, (현재 알림을 보낼 수 있는지, 그 이유)
         if not ok:
             log.info("%s 총량 제한 — %s", scenario, why)
             return None
@@ -408,7 +412,8 @@ class Notifier:
             baseline_at=self._done_at(comply_kind),
         )
         self.store.add(pending)
-        self.limits.note_sent()
+        if not self.limits.is_exempt(scenario):
+            self.limits.note_sent()
         if self._note_sent is not None:
             self._note_sent(scenario)
 

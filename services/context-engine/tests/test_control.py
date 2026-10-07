@@ -37,7 +37,12 @@ class Ctx:
         )
 
     def state(self, vid: str, device_type: str, **fields):
-        """가전 state 를 World 에 넣는다. 노드가 명령을 실행한 결과다."""
+        """가전 state 를 World 에 넣는다. 노드가 명령을 실행한 결과다.
+
+        명령과 같은 시각이면 '명령 전의 보고' 로 걸러지므로 조금
+        흘린다 — 실제로도 노드가 실행하고 보고하기까지 시차가 있다.
+        """
+        self.clock.advance_by(1)
         body = {
             "version": 1, "sent_ts": 0, "src_id": vid, "seq": 1,
             "device_type": device_type, "source": "mock", **fields,
@@ -228,6 +233,16 @@ def test_not_reverted_when_applied(c):
     """명령대로 됐으면 되돌림이 아니다."""
     c.control.set("vd-02", brightness=40)
     c.state("vd-02", "smart_light", power="ON", brightness=40)
+    assert c.control.reverted("vd-02") is False
+
+
+def test_not_reverted_before_node_reports(c):
+    """명령 직후의 state 는 아직 옛 값이다.
+
+    그것으로 판정하면 방금 내린 명령이 곧바로 되돌림으로 잡힌다.
+    """
+    c.state("vd-02", "smart_light", power="ON", brightness=100)
+    c.control.set("vd-02", brightness=40)        # state 보다 뒤
     assert c.control.reverted("vd-02") is False
 
 
