@@ -636,7 +636,7 @@ def test_cooldown_after_notification(c):
     c.presence("vs-03", True)
     assert c.engine.allows("WAKE_ROUTINE") is True
 
-    c.engine.note_notification()
+    c.engine.note_notification("WAKE_ROUTINE")
     c.at(T0 + 60).engine.recompute()
     assert c.engine.suppression.reason == "COOLDOWN"
     assert c.engine.allows("WAKE_ROUTINE") is False
@@ -644,7 +644,7 @@ def test_cooldown_after_notification(c):
 
 def test_cooldown_expires(c):
     c.presence("vs-03", True)
-    c.engine.note_notification()
+    c.engine.note_notification("WAKE_ROUTINE")
     c.at(T0 + 60).engine.recompute()
     assert c.engine.suppression.active is True
 
@@ -655,7 +655,7 @@ def test_cooldown_expires(c):
 def test_cooldown_has_until(c):
     """시한부 억제는 until 이 있다. AWAY/MULTI 는 조건부라 None."""
     c.presence("vs-03", True)
-    c.engine.note_notification()
+    c.engine.note_notification("WAKE_ROUTINE")
     c.at(T0 + 60).engine.recompute()
     assert c.engine.suppression.until == T0 + 1800
 
@@ -663,11 +663,12 @@ def test_cooldown_has_until(c):
 def test_away_outranks_cooldown(c):
     """우선순위 — 더 강한 억제가 이긴다."""
     c.presence("vs-03", True)
-    c.engine.note_notification()
+    c.engine.note_notification("WAKE_ROUTINE")
     c.at(T0 + 100).presence("vs-03", False)
     c.at(T0 + 115).door("vs-06", False)
     c.at(T0 + 800).engine.recompute()
     assert c.engine.suppression.reason == "AWAY"
+    assert "WAKE_ROUTINE" in c.engine.suppression.cooldowns
 
 
 def test_probe_outranks_all(c):
@@ -697,16 +698,67 @@ def test_probe_ends(c):
 def test_suppression_payload_shape(c):
     c.presence("vs-03", True)
     p = c.engine.suppression.payload(c.clock.now())
-    assert set(p) == {"active", "reason", "stage", "until", "except"}
+    assert set(p) == {"active", "reason", "stage", "until", "except", "cooldowns"}
 
 
 def test_suppression_timer_releases_cooldown(c):
     """시한부 억제는 타이머로 풀린다 — 메시지가 없어도."""
     c.presence("vs-03", True)
-    c.engine.note_notification()
+    c.engine.note_notification("WAKE_ROUTINE")
     c.at(T0 + 60).engine.recompute()
     assert c.engine.suppression.active is True
 
     c.clock.advance_to(T0 + 1900)
     c.sched.run_due()
     assert c.engine.suppression.active is False
+
+
+def test_cooldown_is_per_scenario(c):
+    """WAKE_ROUTINE 쿨다운이 MEDICATION_PROMPT 를 막으면 안 된다.
+
+    전역 하나로 두면 수분 권유 한 번에 복약 알림까지 30분 막힌다.
+    """
+    c.presence("vs-03", True)
+    c.engine.note_notification("WAKE_ROUTINE")
+    c.engine.recompute()
+
+    assert c.engine.allows("WAKE_ROUTINE") is False
+    assert c.engine.allows("MEDICATION_PROMPT") is True
+
+
+def test_safety_pierces_cooldown(c):
+    """안전은 전부 뚫는다 (명세)."""
+    c.presence("vs-03", True)
+    c.engine.note_notification("WAKE_ROUTINE")
+    assert c.engine.allows("SAFETY") is True
+
+
+def test_safety_sets_no_cooldown(c):
+    """cooldown_sec = 0 이면 걸지 않는다. 낙상은 반복해야 한다."""
+    c.presence("vs-03", True)
+    c.engine.note_notification("SAFETY")
+    assert c.engine.allows("SAFETY") is True
+    assert c.engine.suppression.cooldowns == ()
+
+
+def test_cooldowns_in_payload(c):
+    """대시보드가 '왜 조용한가' 를 본다."""
+    c.presence("vs-03", True)
+    c.engine.note_notification("WAKE_ROUTINE")
+    c.engine.recompute()
+
+    p = c.engine.suppression.payload(c.clock.now())
+    assert p["cooldowns"] == ["WAKE_ROUTINE"]
+
+
+
+def test_two_scenarios_both_in_cooldown(c):
+    c.presence("vs-03", True)
+    c.engine.note_notification("WAKE_ROUTINE")
+    c.engine.note_notification("MEDICATION_PROMPT")
+    c.engine.recompute()
+
+
+    assert set(c.engine.suppression.cooldowns) == {
+        "WAKE_ROUTINE", "MEDICATION_PROMPT"
+    }

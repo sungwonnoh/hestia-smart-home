@@ -14,6 +14,9 @@ from datetime import datetime, timedelta, timezone, tzinfo
 KST = timezone(timedelta(hours=9))      #한국 표준시를 나타내는 상수 객체 생성
 MINUTES_PER_DAY = 1440                  #하루 전체를 분 단위로 환산한 상수 값(60분 x 24시간)-> 하루를 특정 분 간격으로 나눌 때, 전체 칸 수(인덱스 크기)를 계산하는 상수로 활용
 
+def hhmm(value: str) -> int:
+    hour, minute = value.split(":")
+    return int(hour) * 60 + int(minute)
 
 def minutes_since_midnight(ts: float, tz: tzinfo = KST) -> int:
     """epoch 초를 → 로컬 자정 기준 경과 분 (0~1439)으로 변환

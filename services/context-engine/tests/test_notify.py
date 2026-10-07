@@ -84,6 +84,9 @@ class Ctx:
     def send(self, scenario: str = "WAKE_ROUTINE", **kw):
         kw.setdefault("title", "제목")
         kw.setdefault("text", "본문")
+        # comply_kind 를 준 테스트는 wake 판정을 기대한다
+        if kw.get("comply_kind") and "comply_check" not in kw:
+            kw["comply_check"] = "wake"
         return self.notifier.send(scenario=scenario, **kw)
 
     def topics(self) -> list[str]:
@@ -110,7 +113,7 @@ def presence_at(area: str | None) -> PresenceContext:
     )
 
 
-def suppressed(reason: str = "COOLDOWN") -> SuppressionContext:
+def suppressed(reason: str = "AWAY") -> SuppressionContext:
     return SuppressionContext(
         name="suppression", since=0.0,
         active=True, reason=reason, except_=("SAFETY",),
@@ -169,7 +172,7 @@ def test_picks_affinity_order(c):
     c.device_on("vd-05", "smart_fridge")
     c.device_on("vd-01", "smart_tv")
     chosen = c.notifier.channels.select("WAKE_ROUTINE", presence_at(None))
-    assert chosen == ("vd-10", "vd-05", "vd-01")    # display → fridge → tv
+    assert chosen == ("vd-10", )    # display → fridge → tv
 
 
 
@@ -179,14 +182,25 @@ def test_prefers_user_area(c):
     c.device_on("vd-01", "smart_tv")
     chosen = c.notifier.channels.select("WAKE_ROUTINE", presence_at("living"))
     assert "vd-05" not in chosen                     # 주방 냉장고는 빠진다
-    assert chosen == ("vd-10", "vd-01")
+    assert chosen == ("vd-10", )
 
 
-def test_falls_back_when_area_empty(c):
-    """근접 기기가 없다고 아무것도 안 보내는 것보다 낫다."""
+def test_falls_back_to_voice(c):
+    """다른 구역의 화면에 띄워봐야 사용자가 못 본다.
+    음성은 집 안 어디서든 들린다."""
     c.device_on("vd-05", "smart_fridge")
     chosen = c.notifier.channels.select("WAKE_ROUTINE", presence_at("bathroom"))
-    assert "vd-05" in chosen
+    assert chosen == (VOICE,)
+
+
+def test_no_channel_in_quiet_hours(night):
+    """정숙 시간대에 근접 기기가 없으면 보내지 않는다."""
+    assert night.notifier.channels.select("WAKE_ROUTINE", presence_at("bathroom")) == ()
+
+
+def test_safety_falls_back_to_voice_at_night(night):
+    """안전은 정숙 시간대도 뚫는다."""
+    assert night.notifier.channels.select("SAFETY", presence_at("bathroom")) == (VOICE,)
 
 
 def test_skips_powered_off(c):
@@ -231,6 +245,48 @@ def test_display_node_is_channel(c):
     c.device_on("vd-10", "display_node")
     chosen = c.notifier.channels.select("WAKE_ROUTINE", presence_at("living"))
     assert "vd-10" in chosen
+
+
+def test_proxy_substitutes_channel(c):
+    """TV 는 화면에 문구를 띄울 API 가 없다. 채널 선택 판단은
+    그대로 두되 실제 표시는 디스플레이가 맡는다."""
+    c.device_on("vd-10", "display_node")
+    c.device_on("vd-01", "smart_tv")
+    chosen = c.notifier.channels.select("SAFETY", presence_at("living"))
+
+    assert "vd-01" not in chosen
+    assert "vd-10" in chosen
+
+
+def test_proxy_for_reports_type(c):
+    """디스플레이가 '[TV 대행]' 을 띄울 근거다."""
+    assert c.notifier.channels.proxy_for("SAFETY", "vd-10") == "smart_tv"
+
+
+def test_no_proxy_when_display_is_first(c):
+    """디스플레이가 1순위면 대행이 아니라 원래 거기로 간 것이다."""
+    # affinity 에 display_node 가 먼저인 시나리오로 확인
+    assert c.notifier.channels.proxy_for("WAKE_ROUTINE", "vd-05") is None
+
+
+def test_push_carries_area_and_proxy(c):
+    c.device_on("vd-10", "display_node")
+    c.device_on("vd-01", "smart_tv")
+    c.send(scenario="SAFETY", presence=presence_at("living"))
+
+    p = [x for x in c.of("notify/push") if x["scenario"] == "SAFETY"][0]
+    assert p["channels"] == ["vd-10"]
+    assert p["area"] == "living"
+    assert p["proxy_for"] == "smart_tv"
+
+
+def test_proxy_deduplicates(c):
+    """TV 와 냉장고가 둘 다 디스플레이로 대행돼도 한 번만 뽑힌다."""
+    c.device_on("vd-10", "display_node")
+    c.device_on("vd-01", "smart_tv")
+    c.device_on("vd-05", "smart_fridge")
+    chosen = c.notifier.channels.select("SAFETY", presence_at(None))
+    assert len(chosen) == len(set(chosen))
 
 
 # ============================================================ 총량 제한
@@ -285,14 +341,14 @@ def test_counter_rolls_over_midnight(c):
 
 
 def test_send_publishes_push(c):
-    c.device_on("vd-05", "smart_fridge")
-    nid = c.send(presence=presence_at("kitchen"))
+    c.device_on("vd-10", "display_node")
+    nid = c.send(presence=presence_at("living"))
 
     assert nid is not None
     p = c.of("notify/push")[0]
     assert p["notify_id"] == nid
     assert p["scenario"] == "WAKE_ROUTINE"
-    assert p["channels"] == ["vd-05"]
+    assert p["channels"] == ["vd-10"]
     assert p["payload"] == {"title": "제목", "text": "본문"}
 
 
@@ -540,8 +596,9 @@ def test_outcome_without_comply_kind(c):
 
 def test_channels_tried_accumulates(c):
     """L3 가 어느 채널이 실패했는지 알아야 학습된다."""
-    c.device_on("vd-05", "smart_fridge")
-    nid = c.send(scenario="MEDICATION_PROMPT")
+    c.device_on("vd-10", "display_node")
+    nid = c.send(scenario="MEDICATION_PROMPT", presence=presence_at("living"))
+
 
     c.at(MORNING + 700)
     c.sched.run_due()
@@ -549,7 +606,7 @@ def test_channels_tried_accumulates(c):
     c.sched.run_due()
 
     tried = c.of("intervention/outcome")[0]["user_response"]["channels_tried"]
-    assert "vd-05" in tried
+    assert "vd-10" in tried
     assert VOICE in tried
 
 
@@ -563,3 +620,26 @@ def test_expiry_closes(c):
     n = c.notifier.store.get(nid)
     assert n.closed_reason == CLOSED_EXPIRED
     assert len(c.of("notify/cancel")) == 1
+
+
+def test_send_sets_cooldown(c):
+    """발송 성공 시 그 시나리오의 쿨다운을 건다."""
+    seen: list[str] = []
+    c.notifier._note_sent = seen.append
+    c.device_on("vd-10", "display_node")
+
+    c.send(presence=presence_at("living"))
+    assert seen == ["WAKE_ROUTINE"]
+
+
+def test_escalation_does_not_reset_cooldown(c):
+    """에스컬레이션은 같은 알림의 단계지 새 개입이 아니다."""
+    seen: list[str] = []
+    c.notifier._note_sent = seen.append
+    c.device_on("vd-10", "display_node")
+
+    c.send(scenario="MEDICATION_PROMPT", presence=presence_at("living"))
+    c.at(MORNING + 700)
+    c.sched.run_due()
+
+    assert seen == ["MEDICATION_PROMPT"]       # 한 번만

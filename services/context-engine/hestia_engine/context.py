@@ -600,6 +600,7 @@ class SuppressionContext(Context):
     stage: int | None = None           # SLEEP_PROBE 일 때만
     until: float | None = None         # 시한부 억제만. 조건부는 None
     except_: tuple[str, ...] = ()
+    cooldowns: tuple[str, ...] = ()    # 쿨다운 중인 시나리오
 
     def payload(self, now: float) -> dict[str, Any]:
         return {
@@ -608,6 +609,7 @@ class SuppressionContext(Context):
             "stage": self.stage,
             "until": self.until,
             "except": list(self.except_),
+            "cooldowns": list(self.cooldowns),
         }
 
     def same_as(self, other: Context | None) -> bool:
@@ -617,15 +619,18 @@ class SuppressionContext(Context):
             self.active == other.active
             and self.reason == other.reason
             and self.stage == other.stage
+            and self.cooldowns == other.cooldowns
         )
 
     def allows(self, scenario: str) -> bool:
-        """이 시나리오의 알림을 지금 보내도 되는가.
-
-        명세: 안전 시나리오는 어떤 억제도 뚫는다 — 외출 중이어도,
-        프로브 중이어도, 다인 상황이어도 안전 알림은 발송.
-        """
-        return (not self.active) or scenario in self.except_
+        """이 시나리오의 알림을 지금 보내도 되는가."""
+        if scenario in self.except_:
+            return True                      # SAFETY 는 항상 뚫는다
+        if scenario in self.cooldowns:
+            return False                     # 같은 말을 반복하지 않는다
+        if self.reason == "COOLDOWN":
+            return True
+        return not self.active
 
 
 class SuppressionEvaluator:
@@ -642,7 +647,7 @@ class SuppressionEvaluator:
     def __init__(self, clock: Clock, config: Config) -> None:
         self._clock = clock
         self._config = config
-        self._cooldown_until: float | None = None
+        self._cooldowns: dict[str, float] = {}      # 시나리오->쿨다운 종료 시각.
         self._probe_stage: int | None = None
         self._probe_until: float | None = None
 
@@ -658,43 +663,48 @@ class SuppressionEvaluator:
             self._config.value("suppression", "always_except", default=["SAFETY"])
         )
 
+        # 만료된 쿨다운을 먼저 정리한다.
+        cooldowns = self._active_cooldowns(now)
+        for until in self._cooldowns.values():
+            timers.append(("suppression-cooldown", until))
+
         # 우선순위 — 더 강한 억제가 이긴다
         if self._probe_until is not None and now < self._probe_until:
             timers.append(("suppression-probe", self._probe_until))
             return self._build(
                 "SLEEP_PROBE", self._probe_stage, self._probe_until,
-                (*base, "SLEEP_ROUTINE"), prev, now,
+                (*base, "SLEEP_ROUTINE"), cooldowns, prev, now,
             ), timers
 
         if away.state == "AWAY":
             # 집 안 채널로 보내도 무의미하다
-            return self._build("AWAY", None, None, base, prev, now), timers
+            return self._build("AWAY", None, None, base, cooldowns, prev, now), timers
 
         if occupancy.state == "MULTI":
             # 명세: 개인 Baseline 학습 중단, 개인화 알림 중단
-            return self._build("MULTI", None, None, base, prev, now), timers
+            return self._build("MULTI", None, None, base, cooldowns, prev, now), timers
 
-        if self._cooldown_until is not None:
-            if now < self._cooldown_until:
-                timers.append(("suppression-cooldown", self._cooldown_until))
-                return self._build(
-                    "COOLDOWN", None, self._cooldown_until, base, prev, now
-                ), timers
-            self._cooldown_until = None
 
-        return self._build(None, None, None, base, prev, now), timers
+        if cooldowns:
+            until = max(self._cooldowns.values())
+            return self._build(
+                "COOLDOWN", None, until, base, cooldowns, prev, now
+            ), timers
+
+        return self._build(None, None, None, base, cooldowns, prev, now), timers
 
     # ------------------------------------------------------------ 알림 층이 부른다
 
-    def note_notification(self, at: float | None = None) -> None:
+    def note_notification(self, scenario: str, at: float | None = None) -> None:
         """알림을 발행했다. 쿨다운을 건다.
-
-        알림 층이 생기면 notify/push 직후 호출한다.
         """
-        now = at if at is not None else self._clock.now()
-        self._cooldown_until = now + float(
-            self._config.value("suppression", "cooldown_sec", default=1800)
+        cooldown = float(
+            self._config.notify_policy(scenario).get("cooldown_sec", 1800)
         )
+        if cooldown <= 0:
+            return                      # SAFETY 는 0 이다
+        now = at if at is not None else self._clock.now()
+        self._cooldowns[scenario] = now + cooldown
 
     def start_probe(self, stage: int, duration_sec: float) -> None:
         """수면 프로브 시작. 반응 관측이 오염되지 않도록 다른 알림을 막는다."""
@@ -705,10 +715,20 @@ class SuppressionEvaluator:
         self._probe_stage = None
         self._probe_until = None
 
-    def clear_cooldown(self) -> None:
-        self._cooldown_until = None
+    def clear_cooldown(self, scenario: str | None = None) -> None:
+        """하나 또는 전부를 푼다."""
+        if scenario is None:
+            self._cooldowns.clear()
+        else:
+            self._cooldowns.pop(scenario, None)
 
     # ------------------------------------------------------------ 내부
+
+    def _active_cooldowns(self, now: float) -> tuple[str, ...]:
+        """아직 유효한 쿨다운. 만료된 것은 지운다."""
+        for s in [s for s, until in self._cooldowns.items() if until <= now]:
+            del self._cooldowns[s]
+        return tuple(sorted(self._cooldowns))
 
     def _build(
         self,
@@ -716,6 +736,7 @@ class SuppressionEvaluator:
         stage: int | None,
         until: float | None,
         base_except: tuple[str, ...],
+        cooldowns: tuple[str, ...],
         prev: SuppressionContext | None,
         now: float,
     ) -> SuppressionContext:
@@ -732,7 +753,8 @@ class SuppressionEvaluator:
             reason=reason,
             stage=stage,
             until=until,
-            except_=base_except if active else (),
+            except_=base_except if (active or cooldowns) else (),
+            cooldowns=cooldowns,
         )
     
 
@@ -872,9 +894,15 @@ class ContextEngine:
             return True
         return self.suppression.allows(scenario)
 
-    def note_notification(self) -> None:
-        """알림을 발행했다. 쿨다운을 건다. 알림 층이 호출한다."""
-        self._suppression_eval.note_notification()
+    def note_notification(self, scenario: str) -> None:
+        """알림 층이 발송 직후 부른다."""
+        self._suppression_eval.note_notification(scenario)
+
+
+    @property
+    def suppression_eval(self):
+        """시나리오가 프로브를 걸 때 쓴다."""
+        return self._suppression_eval
 
     # ------------------------------------------------------------ 타이머
 

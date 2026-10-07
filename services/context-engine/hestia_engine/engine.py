@@ -29,6 +29,7 @@ from .model import ModelStore
 from .policy import InterventionPolicy
 from .notify import Notifier
 from .scenarios import ScenarioRunner
+from .control import Controller
 
 log = logging.getLogger(__name__)
 
@@ -152,14 +153,22 @@ class Engine:
             clock, config, world, scheduler,
             publish=self._publish_raw,
             wake_fsm=self.context.wake_fsm,
+            note_sent=self.context.note_notification,
         )
+
+        self.controller = Controller(
+            clock, config, world, publish=self._publish_raw
+        )
+
         self.scenarios = ScenarioRunner(
-            clock, config, self.policy, self.notifier, publish=self._publish_raw
+            clock, config, world, self.policy, self.notifier, controller=self.controller, publish=self._publish_raw,
+            suppression=self.context._suppression_eval,
         )
 
         self.received = 0
         self.dropped = 0
         self._periodic_armed = False
+        self._scenario_timers: set[str] = set()
 
     # ------------------------------------------------------------ 입구
 
@@ -206,7 +215,7 @@ class Engine:
             self.notifier.on_ack(msg.notify_id, msg.ack_type, msg.src_id)
 
         self._publish_all(self.context.recompute())
-        self.scenarios.tick(self.context)
+        self._run_scenarios()
         self._arm_periodic()
 
     # ------------------------------------------------------------ 발행
@@ -228,7 +237,18 @@ class Engine:
         self._publish_all(contexts)
         runner = getattr(self, "scenarios", None)
         if runner is not None:
-            runner.tick(self.context)
+            self._run_scenarios()
+
+    def _run_scenarios(self) -> None:
+        """시나리오를 돌리고 타이머를 다시 건다.
+           직전에 걸었던 것 중 이번 목록에 없는 키는 취소한다 — 사람이 화장실을 나가면 그 타이머는 의미가 없다.
+        """
+        wanted = dict(self.scenarios.tick(self.context))
+        for key in self._scenario_timers - set(wanted):
+            self._sched.cancel(key)
+        for key, when in wanted.items():
+            self._sched.at(when, self._run_scenarios, key=key)
+        self._scenario_timers = set(wanted)
 
     def _publish(self, ctx: Context) -> None:
         """hestia/context/{name}, QoS 1, retained.

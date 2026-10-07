@@ -24,7 +24,7 @@ from .clock import Clock
 from .config import Config
 from .context import PresenceContext, SuppressionContext
 from .timers import Scheduler
-from .timeutil import KST, day_key
+from .timeutil import KST, day_key, hhmm
 from .world import WorldState
 
 log = logging.getLogger(__name__)
@@ -40,6 +40,11 @@ CLOSED_TIMEOUT = "TIMEOUT"
 CLOSED_EXPIRED = "EXPIRED"
 CLOSED_CANCELLED = "CANCELLED"
 
+# 화면에 문구를 띄울 수 없는 기기 종류와 그것을 대신할 종류
+PROXY_TYPES = {
+    "smart_tv": "display_node",
+    "smart_fridge": "display_node",
+}
 
 # ==================================================================== 진행 중인 알림
 
@@ -64,6 +69,10 @@ class PendingNotify:
     decision_id: str | None = None           # 어느 판정에서 나온 알림인지 (판정 id)
     confidence: float = 0.0                  # 해당 판정의 확신도. outcome에 포함
     comply_kind: str | None = None           # hydration / meal / medication
+    comply_check: str | None = None          # wake / movement. 판정 근거의 종류
+    comply_area: str | None = None           # movement 판정 대상 구역
+    area: str | None = None                  # 알림이 겨냥한 구역 = 사용자 위치
+    proxy_for: str | None = None             # 대행 중이면 원래 기기 종류
     baseline_at: float | None = None         # 발송 시점의 _at. 이보다 뒤여야 comply
     closed_at: float | None = None           # 알림이 닫힌 시각. None이면 진행 중
     closed_reason: str | None = None         # SEEN / TIMEOUT / EXPIRED / CANCELLED
@@ -132,7 +141,7 @@ class ChannelSelector:
     """명세의 채널 선택 ①단계.
         : device_type 이 affinity 에 포함 + area 가 presence.user_area 와 일치 + power == ON
 
-    voice 는 별도 경로다. device_type 이 아니므로 위 필터를 통과할 수 없고, area 를 따지지 않으며(집 안 어디서든 들린다), quiet_hours 에 막힌다.
+        voice 는 별도 경로다. device_type 이 아니므로 위 필터를 통과할 수 없고, area 를 따지지 않으며(집 안 어디서든 들린다), quiet_hours 에 막힌다.
     """
 
     def __init__(self, clock: Clock, config: Config, world: WorldState) -> None:
@@ -168,25 +177,25 @@ class ChannelSelector:
         if found:
             return tuple(found)
 
-        # 근접 기기가 없으면 구역을 따지지 않고 다시 찾는다.
-        # 사용자 위치를 모를 때(user_area=None)도 이 경로를 탄다.
-        wide = [
-            vid for vid in self._candidates(affinity, None)
-            if vid not in exclude
-        ]
-        return tuple(wide)
+        # 근접 기기가 없으면 음성으로
+        if VOICE not in exclude and self._voice_allowed(scenario):
+            return (VOICE,)
+        return ()
 
     # ------------------------------------------------------------ 내부
 
     def _candidates(self, affinity: tuple[str, ...], area: str | None) -> list[str]:
-        """affinity 순서를 보존한다 — 명세가 정한 선호 순위다."""
+        """affinity 순서를 보존한다 — 명세가 정한 선호 순위다.
+            알림을 띄울 수 없는 종류(TV, 냉장고 화면)는 대행 종류로 바꿔 찾는다.
+        """
         out: list[str] = []
         for want in affinity:
             if want == VOICE:
                 continue                        # voice 는 별도 경로
-            for vid in self._config.channels(area):     #Config.channels(area)는 해당 area에서 channel=true이고, enabled인 가전 id 반환
+            actual = PROXY_TYPES.get(want, want)    # want는 affinity에서 온 원하는 종류, actual은 실제로 찾을 종류 (PROXY_TYPE에 없으면 actual에 want를 그대로 돌려줌)
+            for vid in self._config.channels(area):
                 d = self._config.device(vid)
-                if d is None or d.device_type != want:  #해당 구역에 있는 가전들 중, 선호하는 가전과 종류가 다르면 뺌
+                if d is None or d.device_type != actual:
                     continue
                 if not self._powered(vid):
                     continue
@@ -194,6 +203,21 @@ class ChannelSelector:
                     out.append(vid)
         return out
 
+    def proxy_for(self, scenario: str, vid: str) -> str | None:
+        """그 채널이 대신 띄우고 있는 원래 기기 종류. 없으면 None.
+            디스플레이가 '[TV 대행]' 을 띄울 근거다.
+        """
+        d = self._config.device(vid)
+        if d is None:
+            return None
+
+        for want in self._policy(scenario, "affinity", default=[]):
+            if want == d.device_type:
+                return None             # 자기가 1순위면 대행이 아니다
+            if PROXY_TYPES.get(want) == d.device_type:
+                return want
+        return None
+    
     def _powered(self, vid: str) -> bool:
         """명세: power == ON 인 기기만 후보다.
 
@@ -217,8 +241,8 @@ class ChannelSelector:
             return False
         now = datetime.fromtimestamp(self._clock.now(), KST)
         minutes = now.hour * 60 + now.minute        # 현재 시각을 분으로
-        start = _hhmm(window.get("start", "22:00"))
-        end = _hhmm(window.get("end", "07:00"))
+        start = hhmm(window.get("start", "22:00"))
+        end = hhmm(window.get("end", "07:00"))
         if start <= end:
             return start <= minutes < end
         return minutes >= start or minutes < end    # 자정을 넘는 창
@@ -227,10 +251,6 @@ class ChannelSelector:
         """Config 가 default 위에 시나리오 항목을 얹고 DEMO 배수까지 적용한다."""
         return self._config.notify_policy(scenario).get(key, default)
 
-
-def _hhmm(value: str) -> int:
-    hour, minute = value.split(":")
-    return int(hour) * 60 + int(minute)
 
 
 # ==================================================================== 총량 제한
@@ -249,12 +269,12 @@ class NotifyLimits:
         self._count = 0
         self._last_sent_at: float | None = None
 
-    def allows(self, priority: str) -> tuple[bool, str | None]:
+    def allows(self, priority: str, scenario: str = "") -> tuple[bool, str | None]:
         """(보내도 되는가, 안 되는 이유)."""
         now = self._clock.now()
         self._roll_day(now)
 
-        if priority == "health":
+        if priority == "health" or self.is_exempt(scenario):
             return True, None                   # 폐기하지 않는다
 
         # 하루 최대 알림 수 초과
@@ -268,6 +288,14 @@ class NotifyLimits:
             return False, "MIN_INTERVAL"
 
         return True, None
+
+
+    def is_exempt(self, scenario: str) -> bool:
+        """총량 제한에서 빠지는가."""
+        return scenario in tuple(
+            self._config.value("limits", "exempt_scenarios", default=[])
+        )
+    
 
     def note_sent(self) -> None:        # 오늘 알림을 몇 건 보냈는지, 마지막으로 언제 보냈는지 기록
         now = self._clock.now()
@@ -303,6 +331,7 @@ class Notifier:
         scheduler: Scheduler,
         publish: Callable[[str, dict[str, Any], bool], None],
         wake_fsm: Any | None = None,
+        note_sent: Callable[[str], None] | None = None,
     ) -> None:
         self._clock = clock
         self._config = config
@@ -310,6 +339,7 @@ class Notifier:
         self._sched = scheduler
         self._publish = publish
         self._wake = wake_fsm
+        self._note_sent = note_sent
 
         self.store = NotifyStore()
         self.channels = ChannelSelector(clock, config, world)
@@ -328,6 +358,8 @@ class Notifier:
         presence: PresenceContext | None = None,
         suppression: SuppressionContext | None = None,
         comply_kind: str | None = None,
+        comply_check: str | None = None,
+        comply_area: str | None = None,
         decision_id: str | None = None,
         confidence: float = 0.0,
     ) -> str | None:
@@ -343,7 +375,7 @@ class Notifier:
             log.debug("%s 억제됨 (%s)", scenario, suppression.reason)
             return None
 
-        ok, why = self.limits.allows(priority)      # 알림 총량 조건에서, (현재 알림을 보낼 수 있는지, 그 이유)
+        ok, why = self.limits.allows(priority, scenario)      # 알림 총량 조건에서, (현재 알림을 보낼 수 있는지, 그 이유)
         if not ok:
             log.info("%s 총량 제한 — %s", scenario, why)
             return None
@@ -369,14 +401,21 @@ class Notifier:
             comply_until=now + comply_min * 60,
             channels=chosen,
             channels_tried=chosen,
+            area=presence.user_area if presence is not None else None,
+            proxy_for=self.channels.proxy_for(scenario, chosen[0]),
             requires_ack=requires_ack,
             decision_id=decision_id,
             confidence=confidence,
             comply_kind=comply_kind,
+            comply_check=comply_check,
+            comply_area=comply_area,
             baseline_at=self._done_at(comply_kind),
         )
         self.store.add(pending)
-        self.limits.note_sent()
+        if not self.limits.is_exempt(scenario):
+            self.limits.note_sent()
+        if self._note_sent is not None:
+            self._note_sent(scenario)
 
         self._push(pending, title, text)
         self._arm(pending)
@@ -407,7 +446,7 @@ class Notifier:
         self._sched.cancel(f"notify-expiry-{notify_id}")
 
         # 봤다고 한 것이지 했다는 뜻은 아니다. comply 창은 계속 돈다
-        if n.comply_kind is None:
+        if n.comply_check is None:
             self._close(notify_id, CLOSED_SEEN)
 
     # ------------------------------------------------------------ 타이머
@@ -424,7 +463,7 @@ class Notifier:
             lambda: self._on_expiry(n.notify_id),
             key=f"notify-expiry-{n.notify_id}",
         )
-        if n.comply_kind is not None:
+        if n.comply_check is not None:
             self._sched.at(
                 n.comply_until,
                 lambda: self._on_comply_window(n.notify_id),
@@ -464,6 +503,7 @@ class Notifier:
             escalation_level=n.escalation_level + 1,
             channels=chosen,
             channels_tried=n.channels_tried + chosen,
+            proxy_for=self.channels.proxy_for(n.scenario, chosen[0]),       # 에스컬레이션에서 proxy_for 갱신
             ack_deadline=deadline,
         )
         self.store.update(escalated)
@@ -508,11 +548,14 @@ class Notifier:
             "scenario": n.scenario,
             "priority": n.priority,
             "channels": list(n.channels),
+            "area": n.area,
             "requires_ack": n.requires_ack,
             "ack_deadline": int(n.ack_deadline),
             "escalation_level": n.escalation_level,
             "payload": {"title": title, "text": text},
         }
+        if n.proxy_for is not None:
+            payload["proxy_for"] = n.proxy_for      # 디스플레이가 다른 가전의 대행일 경우, [__대행]을 띄우게 함
         self._publish("hestia/notify/push", payload, False)
 
         # 음성 채널은 RPi4 가 별도 토픽으로 받는다
@@ -544,7 +587,7 @@ class Notifier:
 
         # comply 창이 아직 남았으면 outcome 은 그때 확정한다 (명세:
         # 확정 시점에 한 번만 발행)
-        if closed.comply_kind is not None and self._clock.now() < closed.comply_until:
+        if closed.comply_check is not None and self._clock.now() < closed.comply_until:
             return
         self._emit_outcome(closed)
 
@@ -575,8 +618,20 @@ class Notifier:
 
     def _comply(self, n: PendingNotify) -> tuple[bool, str | None, float | None]:       # complied, evidence, delay
         """관측 창 안에 해당 행동이 일어났는가.
-        FSM 의 _at 시각을 읽는다. 발송 시점의 값(baseline_at)보다 뒤여야 이 알림 덕분이다 — 09:00 에 이미 물을 마셨는데 09:30 알림의
-        성과로 기록하면 L3 가 엉뚱한 채널을 학습한다.
+           시나리오마다 판정 근거가 다르다. - 근거의 종류를 발송 시점에 받아 여기서 분기
+        """
+        match n.comply_check:
+            case "wake":
+                return self._comply_wake(n)
+            case "movement":
+                return self._comply_movement(n)
+            case _:
+                return False, None, None
+            
+
+    def _comply_wake(self, n: PendingNotify) -> tuple[bool, str | None, float | None]:
+        """FSM 의 _at 시각을 읽는다.
+           발송 시점의 값(baseline_at)보다 뒤여야 이 알림 덕분이다 — 09:00 에 이미 물을 마셨는데 09:30 알림의 성과로 기록하면 L3 가 엉뚱한 채널을 학습한다.
         """
         if n.comply_kind is None or self._wake is None:
             return False, None, None
@@ -593,6 +648,29 @@ class Notifier:
             "medication": "notify:ack",
         }.get(n.comply_kind, n.comply_kind)
         return True, evidence, round(done_at - n.sent_at)
+    
+
+    def _comply_movement(self, n: PendingNotify) -> tuple[bool, str | None, float | None]:
+        """정지가 풀렸는가. '괜찮으신가요' 에 대한 응답은 움직임이다.
+
+        still_sec 이 0 이면 지금 움직이는 중이고, 발송 시점보다 짧으면 한 번 끊겼다가 다시 멈춘 것이다. (어느 쪽이든 그 사이에 움직였다는 뜻)
+
+        delay_sec 은 알 수 없다 — 언제 움직였는지가 아니라 '지금 움직이고 있나' 만 보이기 때문
+        """
+        if n.comply_area is None:
+            return False, None, None
+
+        still = self._world.still_sec(n.comply_area)
+        if still == 0.0:
+            return True, f"movement:{n.comply_area}", None
+
+        # 발송 후 경과보다 정지가 짧으면 중간에 한 번 움직인 것이다
+        elapsed = self._clock.now() - n.sent_at
+        if still < elapsed:
+            return True, f"movement:{n.comply_area}", round(elapsed - still)
+
+        return False, None, None
+    
 
     def _done_at(self, kind: str | None) -> float | None:
         if kind is None or self._wake is None:

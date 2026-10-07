@@ -60,7 +60,7 @@ def evaluate(policy, *, away="HOME", occupancy="SINGLE",
     pol, _ = policy
     return pol.evaluate_meal(
         ctx_away(away), ctx_occupancy(occupancy),
-        ctx_suppression(suppressed, "COOLDOWN" if suppressed else None),
+        ctx_suppression(suppressed, "AWAY" if suppressed else None),
         meal_done=done,
     )
 
@@ -107,7 +107,7 @@ def test_suppressed(policy):
     store.apply(late_model())
     d = evaluate(policy, suppressed=True)
     assert d.reason == SUPPRESSED
-    assert d.factors["suppression_reason"] == "COOLDOWN"
+    assert d.factors["suppression_reason"] == "AWAY"
 
 
 def test_gating_order_model_first(policy):

@@ -101,6 +101,26 @@ device_type = "display_node"
 area = "living"
 channel = true
 note = "ESP32 디스플레이 + 버튼"
+
+[[devices]]
+id = "vd-02"
+device_type = "smart_light"
+area = "living"
+
+[[devices]]
+id = "vd-03"
+device_type = "air_conditioner"
+area = "living"
+
+[[devices]]
+id = "vd-09"
+device_type = "robot_cleaner"
+area = "living"
+
+[[devices]]
+id = "vd-11"
+device_type = "smart_light"
+area = "bedroom"
 """
 
 POLICY = (Path(__file__).parents[3] / "config" / "policy.toml").read_text(encoding="utf-8")
