@@ -285,10 +285,10 @@ cooldown_sec = 1800
 comply_window_min = 30
 expiry_sec = 3600                 # 이 시각이 지나면 보내지 않는다 (명세의 expiry)
 max_escalation = 2                # 명세: 최대 2단계. SAFETY 만 예외
-affinity = ["display_node", "smart_tv", "smart_fridge"]   # default 에도 필요 — 시나리오가 생략할 수 있음
+affinity = ["smart_tv", "smart_fridge", "display_node"]   # default 에도 필요 — 시나리오가 생략할 수 있음
 
 [notify.WAKE_ROUTINE]
-affinity = ["display_node", "smart_fridge", "smart_tv"]
+affinity = ["smart_fridge", "smart_tv", "display_node"]
 comply_window_min = 30
 title = "수분 섭취"
 text = "물 한 잔 드세요"
@@ -301,7 +301,7 @@ title = "복약 시간"
 text = "식사 후 약 드실 시간입니다"
 
 [notify.SAFETY]
-affinity = ["display_node", "smart_tv", "smart_light", "voice"]
+affinity = ["smart_tv", "smart_light", "display_node", "voice"]
 priority = "health"
 requires_ack = true
 ack_deadline_sec = 120           # 짧게. 낙상은 골든타임이 1시간이다

@@ -40,6 +40,11 @@ CLOSED_TIMEOUT = "TIMEOUT"
 CLOSED_EXPIRED = "EXPIRED"
 CLOSED_CANCELLED = "CANCELLED"
 
+# 화면에 문구를 띄울 수 없는 기기 종류와 그것을 대신할 종류
+PROXY_TYPES = {
+    "smart_tv": "display_node",
+    "smart_fridge": "display_node",
+}
 
 # ==================================================================== 진행 중인 알림
 
@@ -66,6 +71,8 @@ class PendingNotify:
     comply_kind: str | None = None           # hydration / meal / medication
     comply_check: str | None = None          # wake / movement. 판정 근거의 종류
     comply_area: str | None = None           # movement 판정 대상 구역
+    area: str | None = None                  # 알림이 겨냥한 구역 = 사용자 위치
+    proxy_for: str | None = None             # 대행 중이면 원래 기기 종류
     baseline_at: float | None = None         # 발송 시점의 _at. 이보다 뒤여야 comply
     closed_at: float | None = None           # 알림이 닫힌 시각. None이면 진행 중
     closed_reason: str | None = None         # SEEN / TIMEOUT / EXPIRED / CANCELLED
@@ -134,7 +141,7 @@ class ChannelSelector:
     """명세의 채널 선택 ①단계.
         : device_type 이 affinity 에 포함 + area 가 presence.user_area 와 일치 + power == ON
 
-    voice 는 별도 경로다. device_type 이 아니므로 위 필터를 통과할 수 없고, area 를 따지지 않으며(집 안 어디서든 들린다), quiet_hours 에 막힌다.
+        voice 는 별도 경로다. device_type 이 아니므로 위 필터를 통과할 수 없고, area 를 따지지 않으며(집 안 어디서든 들린다), quiet_hours 에 막힌다.
     """
 
     def __init__(self, clock: Clock, config: Config, world: WorldState) -> None:
@@ -170,25 +177,25 @@ class ChannelSelector:
         if found:
             return tuple(found)
 
-        # 근접 기기가 없으면 구역을 따지지 않고 다시 찾는다.
-        # 사용자 위치를 모를 때(user_area=None)도 이 경로를 탄다.
-        wide = [
-            vid for vid in self._candidates(affinity, None)
-            if vid not in exclude
-        ]
-        return tuple(wide)
+        # 근접 기기가 없으면 음성으로
+        if VOICE not in exclude and self._voice_allowed(scenario):
+            return (VOICE,)
+        return ()
 
     # ------------------------------------------------------------ 내부
 
     def _candidates(self, affinity: tuple[str, ...], area: str | None) -> list[str]:
-        """affinity 순서를 보존한다 — 명세가 정한 선호 순위다."""
+        """affinity 순서를 보존한다 — 명세가 정한 선호 순위다.
+            알림을 띄울 수 없는 종류(TV, 냉장고 화면)는 대행 종류로 바꿔 찾는다.
+        """
         out: list[str] = []
         for want in affinity:
             if want == VOICE:
                 continue                        # voice 는 별도 경로
-            for vid in self._config.channels(area):     #Config.channels(area)는 해당 area에서 channel=true이고, enabled인 가전 id 반환
+            actual = PROXY_TYPES.get(want, want)    # want는 affinity에서 온 원하는 종류, actual은 실제로 찾을 종류 (PROXY_TYPE에 없으면 actual에 want를 그대로 돌려줌)
+            for vid in self._config.channels(area):
                 d = self._config.device(vid)
-                if d is None or d.device_type != want:  #해당 구역에 있는 가전들 중, 선호하는 가전과 종류가 다르면 뺌
+                if d is None or d.device_type != actual:
                     continue
                 if not self._powered(vid):
                     continue
@@ -196,6 +203,21 @@ class ChannelSelector:
                     out.append(vid)
         return out
 
+    def proxy_for(self, scenario: str, vid: str) -> str | None:
+        """그 채널이 대신 띄우고 있는 원래 기기 종류. 없으면 None.
+            디스플레이가 '[TV 대행]' 을 띄울 근거다.
+        """
+        d = self._config.device(vid)
+        if d is None:
+            return None
+
+        for want in self._policy(scenario, "affinity", default=[]):
+            if want == d.device_type:
+                return None             # 자기가 1순위면 대행이 아니다
+            if PROXY_TYPES.get(want) == d.device_type:
+                return want
+        return None
+    
     def _powered(self, vid: str) -> bool:
         """명세: power == ON 인 기기만 후보다.
 
@@ -373,6 +395,8 @@ class Notifier:
             comply_until=now + comply_min * 60,
             channels=chosen,
             channels_tried=chosen,
+            area=presence.user_area if presence is not None else None,
+            proxy_for=self.channels.proxy_for(scenario, chosen[0]),
             requires_ack=requires_ack,
             decision_id=decision_id,
             confidence=confidence,
@@ -470,6 +494,7 @@ class Notifier:
             escalation_level=n.escalation_level + 1,
             channels=chosen,
             channels_tried=n.channels_tried + chosen,
+            proxy_for=self.channels.proxy_for(n.scenario, chosen[0]),       # 에스컬레이션에서 proxy_for 갱신
             ack_deadline=deadline,
         )
         self.store.update(escalated)
@@ -514,11 +539,14 @@ class Notifier:
             "scenario": n.scenario,
             "priority": n.priority,
             "channels": list(n.channels),
+            "area": n.area,
             "requires_ack": n.requires_ack,
             "ack_deadline": int(n.ack_deadline),
             "escalation_level": n.escalation_level,
             "payload": {"title": title, "text": text},
         }
+        if n.proxy_for is not None:
+            payload["proxy_for"] = n.proxy_for      # 디스플레이가 다른 가전의 대행일 경우, [__대행]을 띄우게 함
         self._publish("hestia/notify/push", payload, False)
 
         # 음성 채널은 RPi4 가 별도 토픽으로 받는다

@@ -7,6 +7,7 @@ from hestia_engine.config import load
 from hestia_engine.engine import Engine, RecordingPublisher
 from hestia_engine.timers import Scheduler
 from hestia_engine.world import WorldState
+from hestia_engine.notify import CLOSED_TIMEOUT, VOICE
 
 from test_activity import HOME, POLICY, MORNING
 
@@ -269,9 +270,9 @@ def test_not_complied_when_still(c):
 
 # ============================================================ 에스컬레이션
 
-
+"""
 def test_escalates_without_limit(c):
-    """SAFETY 는 단계 제한이 없다 — 응답할 때까지 올린다."""
+    # SAFETY 는 단계 제한이 없다 — 응답할 때까지 올린다.
     c.device("vd-01", "smart_tv")
     c.bathroom(True, energy=3)
     c.at(MORNING + STILL_LIMIT + 10).bathroom(True, energy=3, seq=2)
@@ -282,3 +283,25 @@ def test_escalates_without_limit(c):
 
     n = c.engine.notifier.store.get(nid)
     assert n.escalation_level >= 2
+"""
+
+def test_escalation_ends_when_no_channel_left(c):
+    """화장실에 화면이 없으면 1단계가 이미 음성이다.
+
+    TV 는 디스플레이로 대행되는데 화장실에 디스플레이가 없어
+    폴백으로 음성이 간다. 음성으로 두 번 말해봐야 의미가 없으니
+    거기서 끝난다 — 보호자 통보가 3단계로 붙으면 이어진다.
+    """
+    c.device("vd-01", "smart_tv")
+    c.bathroom(True, energy=3)
+    c.at(MORNING + STILL_LIMIT + 10).bathroom(True, energy=3, seq=2)
+
+    assert c.pushes()[0]["channels"] == [VOICE]
+
+    nid = c.pushes()[0]["notify_id"]
+    c.at(MORNING + STILL_LIMIT + 200)
+    c.sched.run_due()
+
+    n = c.engine.notifier.store.get(nid)
+    assert n.escalation_level == 1
+    assert n.closed_reason == CLOSED_TIMEOUT

@@ -44,18 +44,6 @@ class DeviceStateMessage(Message):
 
 
 @dataclass(frozen=True, slots=True)
-class DisplayNodeState(DeviceStateMessage):
-    """ESP32 디스플레이 노드.
-       display 는 '지금 화면에 떠 있는 문구'다. ack 와 다르다 — DELIVERED 는 '띄웠다고 주장' 이고 display 는 '지금 떠 있다' 다.
-       cancel 로 내렸는지도 이 필드가 빈 문자열이 되는 것으로 보인다.
-    """
-
-    power: str = "OFF"
-    display: str = ""                  # 표시 중인 문구. 없으면 ""
-    notify_id: str | None = None       # 그 문구가 어느 알림인지
-
-
-@dataclass(frozen=True, slots=True)
 class DeviceEventMessage(Message):
     """hestia/device/{virtual_id}/event"""
 
@@ -327,6 +315,7 @@ class DisplayNodeState(DeviceStateMessage):
 
     power: str = "OFF"
     display: str = ""                  # 표시 중인 문구. 없으면 ""
+    area: str | None = None            # 이 디스플레이가 담당하는 구역
     notify_id: str | None = None       # 그 문구가 어느 알림인지
 
 
@@ -395,6 +384,7 @@ def parse_device_state(payload: dict, base: dict) -> DeviceStateMessage:
                 **common,
                 power=_one_of(payload, "power", DEVICE_POWER),
                 display=_opt(payload, "display", str) or "",
+                area=_opt(payload, "area", str),
                 notify_id=_opt(payload, "notify_id", str),
             )
         case _:
