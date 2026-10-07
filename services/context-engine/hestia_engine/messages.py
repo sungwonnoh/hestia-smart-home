@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 log = logging.getLogger(__name__)       #현재 모듈(파일) 전용 로거 생성
@@ -487,6 +487,45 @@ def parse_device_event(payload: dict, base: dict) -> DeviceEventMessage:
         case _:
             raise SchemaError(f"알 수 없는 event_type: {event_type!r}")
 
+
+# ============================================================== 가전 명령
+
+ACTIONS = frozenset({"set", "start", "stop", "dock"})
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceCommand(Message):
+    """hestia/device/{virtual_id}/cmd — RPi5 → 노드.
+
+    엔진은 발행만 하고 파싱하지 않는다. 시뮬레이터와 테스트가 쓴다.
+
+    명세: seq 가 없다 — cmd_id 가 식별자 역할을 한다. 노드는 최근
+    처리한 cmd_id 를 링버퍼나 TTL 로 보관해 중복 실행을 막는다.
+    """
+
+    cmd_id: str = ""
+    target: str = ""                    # 토픽의 virtual_id. 페이로드에는 없다
+    device_type: str = ""
+    action: str = "set"
+    params: dict[str, Any] = field(default_factory=dict)
+    reason: str = ""
+    priority: str = "normal"
+
+
+def parse_device_cmd(payload: dict, base: dict, target: str) -> DeviceCommand:
+    """target 은 토픽에서 온다 — src_id 는 발신자(rpi5)라 대상이 아니다."""
+    return DeviceCommand(
+        **base,
+        cmd_id=_req(payload, "cmd_id", str),
+        target=target,
+        device_type=_req(payload, "device_type", str),
+        action=_one_of(payload, "action", ACTIONS),
+        params=dict(payload.get("params") or {}),
+        reason=_opt(payload, "reason", str) or "",
+        priority=_opt(payload, "priority", str) or "normal",
+    )
+
+
 # ============================================================== 노드·시스템
 
 ACK_TYPE = frozenset({"DELIVERED", "SEEN"})
@@ -704,6 +743,10 @@ def _dispatch(parts: list[str], payload: dict, recv_ts: float) -> Message | None
 
         case ["hestia", "device", vid, "event"]:
             return parse_device_event(payload, check_envelope(payload, recv_ts, vid))
+
+        case ["hestia", "device", vid, "cmd"]:
+            src = _req(payload, "src_id", str)
+            return parse_device_cmd(payload, check_envelope(payload, recv_ts, src), vid)
 
         case ["hestia", "notify", "ack"]:
             src = _req(payload, "src_id", str)

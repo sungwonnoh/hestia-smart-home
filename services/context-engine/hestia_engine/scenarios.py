@@ -23,6 +23,7 @@ from .notify import Notifier
 from .world import PresenceState, WorldState
 from .policy import Decision, InterventionPolicy
 from .timeutil import day_key
+from .control import Controller
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ class ScenarioRunner:
         world: WorldState,
         policy: InterventionPolicy,
         notifier: Notifier,
+        controller: Controller,
         publish: Callable[[str, dict[str, Any], bool], None],
     ) -> None:
         self._clock = clock
@@ -49,6 +51,7 @@ class ScenarioRunner:
         self._world = world
         self._policy = policy
         self._notifier = notifier
+        self._controller = controller
         self._publish = publish
 
         # 직전 판정. candidate 나 reason 이 바뀔 때만 발행한다 —

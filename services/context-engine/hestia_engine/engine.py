@@ -29,6 +29,7 @@ from .model import ModelStore
 from .policy import InterventionPolicy
 from .notify import Notifier
 from .scenarios import ScenarioRunner
+from .control import Controller
 
 log = logging.getLogger(__name__)
 
@@ -153,8 +154,13 @@ class Engine:
             publish=self._publish_raw,
             wake_fsm=self.context.wake_fsm,
         )
+
+        self.controller = Controller(
+            clock, config, world, publish=self._publish_raw
+        )
+
         self.scenarios = ScenarioRunner(
-            clock, config, world, self.policy, self.notifier, publish=self._publish_raw
+            clock, config, world, self.policy, self.notifier, controller=self.controller, publish=self._publish_raw
         )
 
         self.received = 0
