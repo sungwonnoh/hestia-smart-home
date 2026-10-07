@@ -115,7 +115,8 @@ void main() {
     api.routes['GET /api/v1/notifications'] = (200, [notificationJson]);
     final n = (await repo.getNotifications()).single;
     expect(n.createdAt.isUtc, isFalse);
-    expect(n.createdAt, DateTime.parse('2026-09-30T19:30:00+09:00'));
+    // DateTime ==는 isUtc까지 비교하므로 기대값도 로컬로 바꿔 같은 시각인지 본다.
+    expect(n.createdAt, DateTime.parse('2026-09-30T19:30:00+09:00').toLocal());
     expect(n.explanationId, '3');
   });
 

@@ -44,6 +44,15 @@ void main() {
     // 홈: Context Engine이 준 상태와 가전 상태
     expect(find.text('집에 있음'), findsOneWidget);
     expect(find.text('식사 완료'), findsOneWidget);
+    // 가전 목록은 현재 상태·공간 아래에 있어 화면 밖일 수 있다. 스크롤해서 확인한다.
+    await tester.scrollUntilVisible(
+      find.text('24°C'),
+      200,
+      scrollable: find.descendant(
+        of: find.byType(ListView),
+        matching: find.byType(Scrollable),
+      ),
+    );
     expect(find.text('24°C'), findsOneWidget);
 
     // 알림 탭 → 상세
