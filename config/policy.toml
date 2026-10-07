@@ -129,7 +129,6 @@ single_restore_sec = 300          # MULTI 해제 후 SINGLE 복귀까지
 # 안전 시나리오는 어떤 억제도 뚫는다.
 
 [suppression]
-cooldown_sec = 1800               # 직전 알림 후 연속 발송 방지
 always_except = ["SAFETY"]        # 억제를 뚫는 시나리오
 
 

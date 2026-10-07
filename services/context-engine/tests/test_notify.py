@@ -113,7 +113,7 @@ def presence_at(area: str | None) -> PresenceContext:
     )
 
 
-def suppressed(reason: str = "COOLDOWN") -> SuppressionContext:
+def suppressed(reason: str = "AWAY") -> SuppressionContext:
     return SuppressionContext(
         name="suppression", since=0.0,
         active=True, reason=reason, except_=("SAFETY",),
@@ -620,3 +620,26 @@ def test_expiry_closes(c):
     n = c.notifier.store.get(nid)
     assert n.closed_reason == CLOSED_EXPIRED
     assert len(c.of("notify/cancel")) == 1
+
+
+def test_send_sets_cooldown(c):
+    """발송 성공 시 그 시나리오의 쿨다운을 건다."""
+    seen: list[str] = []
+    c.notifier._note_sent = seen.append
+    c.device_on("vd-10", "display_node")
+
+    c.send(presence=presence_at("living"))
+    assert seen == ["WAKE_ROUTINE"]
+
+
+def test_escalation_does_not_reset_cooldown(c):
+    """에스컬레이션은 같은 알림의 단계지 새 개입이 아니다."""
+    seen: list[str] = []
+    c.notifier._note_sent = seen.append
+    c.device_on("vd-10", "display_node")
+
+    c.send(scenario="MEDICATION_PROMPT", presence=presence_at("living"))
+    c.at(MORNING + 700)
+    c.sched.run_due()
+
+    assert seen == ["MEDICATION_PROMPT"]       # 한 번만

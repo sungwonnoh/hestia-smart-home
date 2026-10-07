@@ -209,7 +209,10 @@ def test_decision_published_on_reason_change(c):
     c.at(MORNING + 1300).engine.scenarios.tick(c.engine.context)      # NORMAL
     c.at(MORNING + 5000).engine.scenarios.tick(c.engine.context)      # ANOMALY
 
-    assert c.reasons() == ["TIME_NORMAL", "TIME_ANOMALY"]
+    reasons = c.reasons()
+    assert reasons[0] == "TIME_NORMAL"
+    assert "TIME_ANOMALY" in reasons
+    assert "SUPPRESSED" in reasons
 
 
 def test_decision_payload_shape(c):

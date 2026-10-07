@@ -327,6 +327,7 @@ class Notifier:
         scheduler: Scheduler,
         publish: Callable[[str, dict[str, Any], bool], None],
         wake_fsm: Any | None = None,
+        note_sent: Callable[[str], None] | None = None,
     ) -> None:
         self._clock = clock
         self._config = config
@@ -334,6 +335,7 @@ class Notifier:
         self._sched = scheduler
         self._publish = publish
         self._wake = wake_fsm
+        self._note_sent = note_sent
 
         self.store = NotifyStore()
         self.channels = ChannelSelector(clock, config, world)
@@ -407,6 +409,8 @@ class Notifier:
         )
         self.store.add(pending)
         self.limits.note_sent()
+        if self._note_sent is not None:
+            self._note_sent(scenario)
 
         self._push(pending, title, text)
         self._arm(pending)

@@ -153,6 +153,7 @@ class Engine:
             clock, config, world, scheduler,
             publish=self._publish_raw,
             wake_fsm=self.context.wake_fsm,
+            note_sent=self.context.note_notification,
         )
 
         self.controller = Controller(
