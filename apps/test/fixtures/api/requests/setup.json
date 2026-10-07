@@ -5,11 +5,11 @@
     {"id": "utility", "name": "다용도실", "roles": ["LAUNDRY"]}
   ],
   "devices": [
-    {"id": "tv-01", "name": "거실 TV", "type": "TV", "roomId": "living", "status": {"state": "UNKNOWN"}, "online": true},
-    {"id": "light-01", "name": "거실 조명", "type": "LIGHT", "roomId": "living", "status": {"state": "UNKNOWN"}, "online": true},
-    {"id": "air-conditioner-01", "name": "거실 에어컨", "type": "AIR_CONDITIONER", "roomId": "living", "status": {"state": "UNKNOWN"}, "online": true},
-    {"id": "refrigerator-01", "name": "주방 냉장고", "type": "REFRIGERATOR", "roomId": "kitchen", "status": {"state": "UNKNOWN"}, "online": true},
-    {"id": "washer-01", "name": "다용도실 세탁기", "type": "WASHER", "roomId": "utility", "status": {"state": "UNKNOWN"}, "online": true}
+    {"id": "tv-01", "name": "거실 TV", "type": "TV", "roomId": "living"},
+    {"id": "light-01", "name": "거실 조명", "type": "LIGHT", "roomId": "living"},
+    {"id": "air-conditioner-01", "name": "거실 에어컨", "type": "AIR_CONDITIONER", "roomId": "living"},
+    {"id": "refrigerator-01", "name": "주방 냉장고", "type": "REFRIGERATOR", "roomId": "kitchen"},
+    {"id": "washer-01", "name": "다용도실 세탁기", "type": "WASHER", "roomId": "utility"}
   ],
   "preferences": {
     "notificationsEnabled": true,

@@ -23,5 +23,5 @@ abstract final class AppConfig {
   static const requestTimeout = Duration(seconds: 5);
 
   /// 실시간 연결(Phase 3) 전까지 새 알림을 확인하는 주기.
-  static const notificationPollInterval = Duration(seconds: 10);
+  static const notificationPollInterval = Duration(seconds: 5);
 }

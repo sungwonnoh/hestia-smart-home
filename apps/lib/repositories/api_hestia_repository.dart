@@ -19,7 +19,7 @@ import 'hestia_repository.dart';
 class ApiHestiaRepository implements HestiaRepository {
   ApiHestiaRepository(
     this._client, {
-    this.pollInterval = const Duration(seconds: 10),
+    this.pollInterval = const Duration(seconds: 5),
   });
 
   factory ApiHestiaRepository.fromConfig() => ApiHestiaRepository(
@@ -41,9 +41,22 @@ class ApiHestiaRepository implements HestiaRepository {
   Future<HomeSetup?> getSetup() => _orNull(() async =>
       HomeSetup.fromJson(_map(await _client.get('$_api/setup'))));
 
+  /// devices는 DeviceIn 형태로 보낸다. status/online은 서버가 MQTT로 채우는 값이라 빼고,
+  /// virtualId는 비워 두면 서버가 같은 종류·공간의 장치에 연결한다.
   @override
   Future<void> saveSetup(HomeSetup setup) async {
-    await _client.put('$_api/setup', setup.toJson());
+    await _client.put('$_api/setup', {
+      ...setup.toJson(),
+      'devices': [
+        for (final d in setup.devices)
+          {
+            'id': d.id,
+            'name': d.name,
+            'type': d.type.wireName,
+            'roomId': d.roomId,
+          },
+      ],
+    });
   }
 
   // ---------------------------------------------------------------- home

@@ -191,7 +191,7 @@ void main() {
 
   group('Flutter 요청 → FastAPI (requests/ fixture)', () {
     test('최초 설정 저장 JSON', () async {
-      // 온보딩이 만드는 형태와 같게 만든다. (id: 종류-01, status/online 기본값)
+      // 온보딩이 만드는 형태와 같게 만든다. (id: 종류-01, status/online은 보내지 않는다)
       const living = Room(id: 'living', name: '거실', roles: [RoomRole.living]);
       const kitchen = Room(id: 'kitchen', name: '주방', roles: [RoomRole.meal]);
       const utility =
