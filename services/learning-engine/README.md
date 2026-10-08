@@ -58,10 +58,14 @@ python3 services/learning-engine/aruba.py
 # 특정 시각의 tail probability 조회 (breakfast meal_time)
 python3 services/learning-engine/debug_kde_query.py --time 09:40
 
-# MQTT payload 확인 / 발행
+# hestia/model/kde payload 확인 / 발행 (QoS 1, retained)
+# 입력 옵션(--t0-jsonl / --aruba-raw / --synthetic-hydration)은 baseline.py와 같다
 python3 services/learning-engine/model_payload.py
-python3 services/learning-engine/mqtt_publisher.py
+python3 services/learning-engine/mqtt_publisher.py --host <broker> --port 1883
 ```
+
+payload는 발행 전에 명세(필수 필드, 격자, density 합 1, predictability 0~1, JSON 직렬화)를 검증합니다.
+학습할 수 없는 distribution은 빈 배열 대신 키를 빼고 보냅니다. Context Engine은 일부만 온 payload도 받습니다.
 
 Aruba 원본(`data/raw/`)은 gitignore 대상입니다. 받는 방법은 [`docs/dataset-setup.md`](../../docs/dataset-setup.md)를 참고하세요.
 

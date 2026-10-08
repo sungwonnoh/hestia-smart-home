@@ -192,6 +192,17 @@ def parse_t0_line(line: str) -> T0Sample:
             f"잘못된 JSON: {exc}"
         ) from exc
 
+    return parse_t0_record(obj)
+
+
+def parse_t0_record(obj) -> T0Sample:
+    """
+    t0 레코드(dict) 한 건을 T0Sample로 변환한다.
+
+    Context Engine FileT0Log 한 줄과 hestia/log/t0 MQTT payload를 모두 받는다.
+    MQTT 봉투 필드(version / sent_ts / src_id 등)는 KDE 입력이 아니므로 무시한다.
+    """
+
     if not isinstance(obj, dict):
         raise ValueError(
             "JSON object가 아닙니다."
@@ -606,7 +617,31 @@ def build_model(
     }
 
 
-def _cli_samples(args) -> list[KdeSample] | None:
+def add_input_arguments(parser: argparse.ArgumentParser) -> None:
+    """학습 입력 CLI 옵션. baseline / model_payload / mqtt_publisher가 공유한다."""
+
+    parser.add_argument(
+        "--t0-jsonl",
+        type=Path,
+        help="Context Engine t0 JSONL 경로",
+    )
+    parser.add_argument(
+        "--aruba-raw",
+        type=Path,
+        help="Aruba 원본(aruba.txt) — meal_time / sleep_time·wake_time(proxy)",
+    )
+    parser.add_argument(
+        "--synthetic-hydration",
+        action="store_true",
+        help="검증용 synthetic hydration_lag 추가",
+    )
+    parser.add_argument("--synthetic-days", type=int, default=60)
+    parser.add_argument("--synthetic-mean", type=float, default=15)
+    parser.add_argument("--synthetic-std", type=float, default=5)
+    parser.add_argument("--synthetic-seed", type=int, default=42)
+
+
+def samples_from_args(args) -> list[KdeSample] | None:
     """
     CLI 입력 조합. 아무 옵션도 없으면 None(기존 Aruba breakfast)이다.
     --aruba-raw / --synthetic-hydration 은 개발·검증용이다.
@@ -639,32 +674,12 @@ def _cli_samples(args) -> list[KdeSample] | None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--t0-jsonl",
-        type=Path,
-        help="Context Engine t0 JSONL 경로",
-    )
-    parser.add_argument(
-        "--aruba-raw",
-        type=Path,
-        help="Aruba 원본(aruba.txt) — meal_time / sleep_time·wake_time(proxy)",
-    )
-    parser.add_argument(
-        "--synthetic-hydration",
-        action="store_true",
-        help="검증용 synthetic hydration_lag 추가",
-    )
-    parser.add_argument("--synthetic-days", type=int, default=60)
-    parser.add_argument("--synthetic-mean", type=float, default=15)
-    parser.add_argument("--synthetic-std", type=float, default=5)
-    parser.add_argument("--synthetic-seed", type=int, default=42)
-
+    add_input_arguments(parser)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
 
-    model = build_model(_cli_samples(args))
+    model = build_model(samples_from_args(args))
 
     print(
         json.dumps(
