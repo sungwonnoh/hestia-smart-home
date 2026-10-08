@@ -7,7 +7,7 @@ import pytest
 import casas
 from aruba import read_events
 from casas import EVENT, SEGMENT, SPECS, SleepSpec, event_sessions, export_jsonl, extract_all, extract_person
-from sleep_sessions import NIGHT, load_records, samples_from_records
+from sleep_sessions import NIGHT, samples_from_events
 
 
 RAW_DIR = Path(__file__).resolve().parents[3] / "data" / "raw" / "casas" / "aruba"
@@ -147,7 +147,10 @@ def test_export_and_relearn(tmp_path):
     raw.mkdir()
     write(raw, "cairo.txt", cairo_lines())
     [path] = [p for p in export_jsonl(tmp_path / "out", raw) if "cairo_R1" in p.name]
-    series, classified = samples_from_records(load_records(path))
+    from baseline import load_t0_records
+    records = load_t0_records(path)                      # t0 형식 검증을 통과해야 한다
+    assert {r["type"] for r in records} == {"sleep_start", "sleep_end"}
+    series, classified = samples_from_events(records)
     assert [c.kind for c in classified] == [NIGHT, NIGHT]
     assert [hhmm(x) for x in series["sleep_time"]] == ["20:54", "21:52"]
     assert [hhmm(x) for x in series["wake_time"]] == ["05:29"]

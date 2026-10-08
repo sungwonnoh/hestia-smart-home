@@ -17,12 +17,11 @@ from sleep_sessions import (
     SleepSession,
     classify_sessions,
     drop_implausible,
-    load_records,
     merge_sessions,
     night_samples,
-    parse_session_record,
-    samples_from_records,
-    session_records,
+    samples_from_events,
+    session_events,
+    sessions_from_events,
     write_records,
 )
 
@@ -148,89 +147,118 @@ def test_unobserved_wake_keeps_bedtime_only():
     assert s["sleep_time"][0].proxy is True
 
 
-# ============================================================ 내부 레코드 (SLEEP.md 형식)
+# ============================================================ Context Engine sleep_start / sleep_end
 
 
-def test_parse_session_record_iso_and_epoch():
-    iso = parse_session_record({"type": "sleep", "t0": "2026-09-01T23:00:00", "duration_sec": 28800})
-    epoch = parse_session_record({"type": "sleep", "t0": 1788271200, "duration_sec": 28800})   # 2026-09-01 23:00 KST
-    assert iso == epoch
-    assert iso.end == t("2026-09-02 07:00")
+def epoch(local: str) -> float:
+    """로컬(KST) 시각 문자열 → epoch"""
+    from sleep_sessions import KST
+    return t(local).replace(tzinfo=KST).timestamp()
 
 
-@pytest.mark.parametrize("obj", [
-    {"type": "wake", "t0": "2026-09-01T23:00:00", "duration_sec": 1},
-    {"type": "sleep", "duration_sec": 100},
-    {"type": "sleep", "t0": "2026-09-01T23:00:00"},
-    {"type": "sleep", "t0": "2026-09-01T23:00:00", "duration_sec": -1},
-    {"type": "sleep", "t0": "2026-09-01T23:00:00", "duration_sec": True},
-    {"type": "sleep", "t0": "어제 밤", "duration_sec": 100},
-    {"type": "sleep", "t0": "2026-09-01T23:00:00", "duration_sec": 100, "prompted": "no"},
-    [],
-])
-def test_invalid_session_record(obj):
-    with pytest.raises(ValueError):
-        parse_session_record(obj)
+def ev(type_, local, **extra):
+    """Context Engine t0 로그 형식"""
+    return {"date": local[:10], "type": type_, "t0": epoch(local), "source": "sensor",
+            "prompted": False, "duration_sec": 0, **extra}
 
 
-def records(*sessions):
-    """(start, end, wake 기록 여부)"""
-    out = []
-    for start, end, woke in sessions:
-        s = session(start, end)
-        out.append({"type": "sleep", "t0": s.start.isoformat(), "duration_sec": s.minutes * 60,
-                    "source": "sensor", "prompted": False, "date": s.start.date().isoformat()})
-        if woke:
-            out.append({"type": "wake", "t0": s.end.isoformat(), "duration_sec": 0,
-                        "source": "sensor", "prompted": False, "date": s.end.date().isoformat()})
-    return out
+def test_events_pair_into_sessions():
+    sessions, dropped = sessions_from_events([
+        ev("sleep_start", "2026-09-01 23:00", area="bedroom"),
+        ev("sleep_end", "2026-09-02 07:00"),
+    ])
+    assert dropped == 0
+    [s] = sessions
+    assert (s.start, s.end, s.wake_observed) == (t("2026-09-01 23:00"), t("2026-09-02 07:00"), True)
+    assert (s.area, s.source) == ("bedroom", "sensor")
 
 
-def test_records_to_night_samples():
-    """Context Engine 이 수면 기록(밤잠 + 낮잠)을 주면 밤잠만 골라 학습한다."""
-    series, classified = samples_from_records(records(
-        ("2026-09-01 14:00", "2026-09-01 15:00", True),
-        ("2026-09-01 23:00", "2026-09-02 07:00", True),
-        ("2026-09-02 23:30", "2026-09-03 06:45", False),
-    ))
-    assert [c.kind for c in classified] == [NAP, NIGHT, NIGHT]
-    assert [hhmm(x) for x in series["sleep_time"]] == ["23:00", "23:30"]
-    assert [hhmm(x) for x in series["wake_time"]] == ["07:00"]          # wake 기록이 없는 밤은 제외
+def test_events_are_sorted_by_t0():
+    """로그 순서가 섞여도 시각 순으로 짝짓는다."""
+    sessions, _ = sessions_from_events([
+        ev("sleep_end", "2026-09-02 07:00"),
+        ev("sleep_start", "2026-09-01 23:00"),
+    ])
+    assert [(x.start.hour, x.end.hour) for x in sessions] == [(23, 7)]
 
 
-def test_bad_record_is_skipped(caplog):
-    good = records(("2026-09-01 23:00", "2026-09-02 07:00", True))
+def test_unmatched_events():
+    sessions, dropped = sessions_from_events([
+        ev("sleep_end", "2026-09-01 06:00"),               # start 없음 → 버림
+        ev("sleep_start", "2026-09-01 22:00"),             # end 없이 다음 start → 기상 미관측
+        ev("sleep_start", "2026-09-01 23:00"),
+        ev("sleep_end", "2026-09-02 07:00"),
+        ev("sleep_start", "2026-09-02 23:10"),             # 마지막 — 아직 자는 중
+    ])
+    assert dropped == 1
+    assert [(x.start.strftime("%d %H:%M"), x.wake_observed, x.minutes) for x in sessions] == [
+        ("01 22:00", False, 0), ("01 23:00", True, 480), ("02 23:10", False, 0),
+    ]
+
+
+def test_other_types_are_ignored():
+    sessions, dropped = sessions_from_events([
+        ev("meal", "2026-09-01 08:00"),
+        ev("wake", "2026-09-01 07:00"),
+        ev("sleep_start", "2026-09-01 23:00"),
+        ev("sleep_end", "2026-09-02 07:00"),
+    ])
+    assert len(sessions) == 1 and dropped == 0
+
+
+def test_unreadable_t0_is_dropped(caplog):
     with caplog.at_level(logging.WARNING):
-        series, _ = samples_from_records(good + [{"type": "sleep", "t0": "x", "duration_sec": 5}])
-    assert len(series["sleep_time"]) == 1
+        sessions, dropped = sessions_from_events([{"type": "sleep_start", "t0": "어제 밤"}])
+    assert sessions == [] and dropped == 1
     assert "건너뜀" in caplog.text
+
+
+def test_prompted_and_area_from_start():
+    [s], _ = sessions_from_events([
+        ev("sleep_start", "2026-09-01 14:00", area="living", prompted=True),
+        ev("sleep_end", "2026-09-01 15:00"),
+    ])
+    assert (s.prompted, s.area) == (True, "living")
+
+
+def test_events_to_night_samples():
+    """Context Engine 이 수면(밤잠 + 낮잠)을 보내면 밤잠만 골라 학습한다."""
+    series, classified = samples_from_events([
+        ev("sleep_start", "2026-09-01 14:00", area="living"),
+        ev("sleep_end", "2026-09-01 15:00"),
+        ev("sleep_start", "2026-09-01 23:00", area="bedroom"),
+        ev("sleep_end", "2026-09-02 02:00"),                # 화장실
+        ev("sleep_start", "2026-09-02 02:10", area="bedroom"),
+        ev("sleep_end", "2026-09-02 07:00"),
+        ev("sleep_start", "2026-09-02 23:30", area="bedroom"),   # 기상 기록 없음
+    ])
+    assert [c.kind for c in classified] == [NAP, NIGHT, NIGHT]
+    assert classified[1].session.parts == 2                 # 끊긴 수면 병합
+    assert [hhmm(x) for x in series["sleep_time"]] == ["23:00", "23:30"]
+    assert [hhmm(x) for x in series["wake_time"]] == ["07:00"]
+    assert {x.source for x in series["sleep_time"]} == {"sensor"}
 
 
 def test_export_and_reload_round_trip(tmp_path):
     original = classify_sessions([
-        session("2026-09-01 14:00", "2026-09-01 15:00"),
-        session("2026-09-01 23:00", "2026-09-02 07:00"),
+        session("2026-09-01 14:00", "2026-09-01 15:00", area="living"),
+        session("2026-09-01 23:00", "2026-09-02 07:00", area="bedroom"),
         session("2026-09-02 22:10", "2026-09-02 23:58", wake_observed=False),
     ])
-    path = tmp_path / "sleep.jsonl"
-    write_records(session_records(original, "aruba"), path)
+    path = tmp_path / "t0.jsonl"
+    write_records(session_events(original, "aruba"), path)
 
     lines = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()]
-    assert [r["type"] for r in lines] == ["sleep", "wake", "sleep", "wake", "sleep"]
-    assert set(lines[0]) == {"date", "type", "t0", "source", "prompted", "duration_sec"}
+    assert [r["type"] for r in lines] == ["sleep_start", "sleep_end", "sleep_start", "sleep_end", "sleep_start"]
+    assert set(lines[1]) == {"date", "type", "t0", "source", "prompted", "duration_sec"}
+    assert lines[0]["area"] == "living" and "area" not in lines[4]
+    assert lines[2]["t0"] == epoch("2026-09-01 23:00")
 
-    series, reloaded = samples_from_records(load_records(path))
+    series, reloaded = samples_from_events(lines)
     assert [c.kind for c in reloaded] == [c.kind for c in original]
     assert [hhmm(x) for x in series["sleep_time"]] == ["23:00", "22:10"]
     assert [hhmm(x) for x in series["wake_time"]] == ["07:00"]
-
-
-def test_load_records_skips_broken_lines(tmp_path, caplog):
-    path = tmp_path / "sleep.jsonl"
-    path.write_text('{"type": "sleep"}\n{broken\n[1]\n\n', encoding="utf-8")
-    with caplog.at_level(logging.WARNING):
-        assert load_records(path) == [{"type": "sleep"}]
-    assert "sleep.jsonl:2" in caplog.text
+    assert {x.source for x in series["sleep_time"]} == {"aruba"}
 
 
 # ============================================================ SLEEP.md §15

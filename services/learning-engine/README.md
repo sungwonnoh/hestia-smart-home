@@ -28,8 +28,8 @@ Context Engine이 판단할 때 쓰는 "이 사람의 평소 시간 패턴"을 �
 | CASAS Aruba | `aruba.py` | meal / sleep / wake | sleep·wake는 `Sleeping` 라벨 **proxy** |
 | CASAS Milan / Tulum2 / Cairo | `casas.py` | sleep / wake | 거주자별 **proxy**. predictability 비교·검증용 |
 | synthetic | `synthetic.py` | hydration_lag | CASAS에 수분 섭취 라벨 없음. **검증용 fixture** |
-| Context Engine t0 | `baseline.py` | meal / wake / hydration | 현재 t0 명세에 `sleep` type 없음 |
-| 내부 sleep / wake 레코드 | `sleep_sessions.py` | sleep / wake | SLEEP.md 형식. production schema 아님 |
+| Context Engine t0 | `baseline.py` | meal / wake / hydration | |
+| Context Engine t0 `sleep_start` / `sleep_end` | `sleep_sessions.py` | sleep / wake | 같은 t0 로그. 짝지어 수면으로 만든 뒤 밤잠만 학습 |
 
 모든 출처는 공통 표본 `KdeSample`(`samples.py`)로 바뀐 뒤 같은 KDE를 탑니다.
 
@@ -45,7 +45,7 @@ t0 adapter    ─┘
 지금 이 수면이 밤잠인지 실시간으로 판정하는 일은 RPi5 Context Engine 담당입니다.
 
 ```text
-수면 기록 (CASAS 라벨 / 내부 sleep 레코드)
+수면 기록 (CASAS 라벨 / Context Engine sleep_start · sleep_end)
   ↓ merge_sessions      화장실 등으로 끊긴 구간 병합 (간격 ≤ 15분 또는 Bed_to_Toilet)
   ↓ drop_implausible    24시간 이상은 기록 오류로 제외
   ↓ classify_sessions   정오~다음 날 정오마다 가장 긴 수면 = 밤잠, 나머지 = 낮잠
@@ -56,14 +56,16 @@ t0 adapter    ─┘
 - 기상이 관측되지 않은 수면(기록 종료 등)은 취침 시각만 학습합니다.
 - 알려진 한계: 그 밤의 수면 기록이 없으면 오후 낮잠이 밤잠으로 분류됩니다 (CASAS 6명 631밤 중 1건).
 
-내부 sleep 레코드 (production `hestia/log/t0` 아님):
+Context Engine 은 수면 시작·끝을 t0 로그에 따로 남깁니다 (meal / wake / hydration 과 같은 형식, `t0` 는 epoch):
 
 ```json
-{"date": "2010-11-03", "type": "sleep", "t0": "2010-11-04T00:03:50", "source": "aruba", "prompted": false, "duration_sec": 28642}
-{"date": "2010-11-04", "type": "wake",  "t0": "2010-11-04T08:01:12", "source": "aruba", "prompted": false, "duration_sec": 0}
+{"date": "2026-09-01", "type": "sleep_start", "t0": 1788271200, "area": "bedroom", "source": "sensor", "prompted": false, "duration_sec": 0}
+{"date": "2026-09-02", "type": "sleep_end",   "t0": 1788300000, "source": "sensor", "prompted": false, "duration_sec": 0}
 ```
 
-`sleep`의 `duration_sec`은 수면 길이입니다. 끝 시각과 같은 `wake` 레코드가 있어야 기상 시각을 학습합니다.
+- 시각 순으로 `sleep_start` 와 다음 `sleep_end` 를 짝짓습니다. 끝이 없는 시작은 기상 미관측(취침만 학습), 시작이 없는 끝은 버립니다.
+- `area` 는 저장만 하고 밤잠 / 낮잠 판단에는 쓰지 않습니다.
+- **wake_time 출처**: 기상이 관측된 밤잠이 있으면 그 `sleep_end` 를 쓰고 `wake` 레코드는 쓰지 않습니다 (같은 기상을 두 번 학습하지 않도록). 없으면 `wake` 레코드를 씁니다.
 
 ## 실행
 
@@ -80,14 +82,12 @@ python3 services/learning-engine/baseline.py \
 # Context Engine t0 로그
 python3 services/learning-engine/baseline.py --t0-jsonl /data/hestia/t0_log.jsonl
 
-# 내부 sleep / wake 레코드로 학습 (밤잠만)
-python3 services/learning-engine/baseline.py --sleep-jsonl sleep.jsonl
-
 # Aruba 원본 라벨·표본 수 확인
 python3 services/learning-engine/aruba.py
 
-# CASAS 거주자별 sleep / wake 요약, 내부 레코드 JSONL 내보내기
-python3 services/learning-engine/casas.py --export-jsonl /tmp/sleep_jsonl
+# CASAS 거주자별 sleep / wake 요약, Context Engine 형식(sleep_start / sleep_end) JSONL 내보내기
+python3 services/learning-engine/casas.py --export-jsonl /tmp/t0_export
+python3 services/learning-engine/baseline.py --t0-jsonl /tmp/t0_export/aruba_R1_t0.jsonl
 
 # 특정 시각의 tail probability 조회 (breakfast meal_time)
 python3 services/learning-engine/debug_kde_query.py --time 09:40
