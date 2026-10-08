@@ -7,7 +7,7 @@ import pytest
 
 from aruba import (
     ActivityEvent,
-    ArubaLog,
+    clock_minutes,
     count_labels,
     extract_meal,
     extract_samples,
@@ -59,7 +59,12 @@ def ev(ts: str, name: str, kind: str, line_no: int) -> ActivityEvent:
 
 
 def hhmm(sample) -> str:
-    return sample.at.strftime("%H:%M")
+    m = int(sample.value)
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def hour(sample) -> int:
+    return int(sample.value // 60)
 
 
 # ============================================================ 파싱
@@ -303,8 +308,9 @@ def test_extract_meal_uses_begin_only(tmp_path):
     )
     meals = extract_meal(read_events(path))
     assert [(m.date, hhmm(m)) for m in meals] == [("2010-11-04", "08:11"), ("2010-11-04", "18:00")]
-    assert meals[0].minutes == pytest.approx(8 * 60 + 11 + 9.966157 / 60)
+    assert meals[0].value == pytest.approx(8 * 60 + 11 + 9.966157 / 60)
     assert not any(m.proxy for m in meals)
+    assert {(m.source, m.prompted) for m in meals} == {("aruba", False)}
 
 
 def test_extract_samples_has_three_series(tmp_path):
@@ -342,22 +348,26 @@ def test_real_labels_exist(raw_log):
 def test_real_meal_matches_existing_parser(raw_log):
     """scripts/datasets/parse_aruba.py 결과(meal_preparation.csv)와 같은 집합."""
     with open(PROCESSED / "meal_preparation.csv", encoding="utf-8") as f:
-        expected = [read_csv_ts(r) for r in csv.DictReader(f)]
+        expected = sorted((r["date"], clock_minutes(read_csv_ts(r))) for r in csv.DictReader(f))
 
-    assert sorted(m.at for m in extract_meal(raw_log)) == sorted(expected)
+    actual = sorted((m.date, m.value) for m in extract_meal(raw_log))
+    assert [d for d, _ in actual] == [d for d, _ in expected]
+    assert [v for _, v in actual] == pytest.approx([v for _, v in expected], abs=1e-9)
 
 
 @needs_raw
 def test_real_meal_reproduces_breakfast(raw_log):
     """05:00~11:00 날짜별 첫 이벤트 → 기존 breakfast_preparation.csv 212일."""
     with open(PROCESSED / "breakfast_preparation.csv", encoding="utf-8") as f:
-        expected = [read_csv_ts(r) for r in csv.DictReader(f)]
+        expected = sorted((r["date"], clock_minutes(read_csv_ts(r))) for r in csv.DictReader(f))
 
     first = {}
-    for m in sorted(extract_meal(raw_log), key=lambda m: m.at):
-        if 5 <= m.at.hour < 11:
-            first.setdefault(m.date, m.at)
-    assert sorted(first.values()) == sorted(expected)
+    for m in sorted(extract_meal(raw_log), key=lambda m: (m.date, m.value)):
+        if 5 <= hour(m) < 11:
+            first.setdefault(m.date, m.value)
+    actual = sorted(first.items())
+    assert [d for d, _ in actual] == [d for d, _ in expected]
+    assert [v for _, v in actual] == pytest.approx([v for _, v in expected], abs=1e-9)
 
 
 @needs_raw
@@ -367,5 +377,5 @@ def test_real_sleep_wake_proxy(raw_log):
     assert len(s.sleep_time) == 220
     assert len(s.wake_time) == 219                  # 마지막 밤은 기록 종료로 잘림
     # 취침은 20~03시, 기상은 03~10시 안에 있어야 한다
-    assert all(x.at.hour >= 20 or x.at.hour <= 3 for x in s.sleep_time)
-    assert all(3 <= x.at.hour <= 10 for x in s.wake_time)
+    assert all(hour(x) >= 20 or hour(x) <= 3 for x in s.sleep_time)
+    assert all(3 <= hour(x) <= 10 for x in s.wake_time)

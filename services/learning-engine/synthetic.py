@@ -19,28 +19,16 @@ from __future__ import annotations
 
 import argparse
 import math
-from dataclasses import dataclass
 from datetime import date, timedelta
 
 import numpy as np
+
+from samples import KdeSample
 
 
 # 한 번에 다시 뽑는 최대 횟수. 범위 밖 값만 다시 뽑는데,
 # 평균이 허용 범위에서 너무 멀면 끝나지 않으므로 상한을 둔다.
 MAX_REDRAW_ROUNDS = 1000
-
-
-@dataclass(frozen=True)
-class SyntheticSample:
-    """
-    distribution 하나에 들어갈 합성 표본.
-
-    value 는 hydration_lag 처럼 elapsed duration 이면 경과 분이다.
-    """
-
-    distribution: str
-    date: str
-    value: float
 
 
 def _check_finite(name: str, value: float) -> None:
@@ -91,7 +79,7 @@ def generate_hydration_lag(
     seed: int | None = None,
     max_min: float | None = None,
     start_date: date = date(2026, 1, 1),
-) -> list[SyntheticSample]:
+) -> list[KdeSample]:
     """
     하루 한 건씩 "기상 → 첫 수분 섭취" 경과 분을 만든다.
 
@@ -135,11 +123,13 @@ def generate_hydration_lag(
         high=max_min,
     )
 
+    # source="synthetic" 은 학습 입력 내부 표시일 뿐 t0 source enum 이 아니다.
     return [
-        SyntheticSample(
+        KdeSample(
             distribution="hydration_lag",
-            date=(start_date + timedelta(days=i)).isoformat(),
             value=float(v),
+            date=(start_date + timedelta(days=i)).isoformat(),
+            source="synthetic",
         )
         for i, v in enumerate(values)
     ]

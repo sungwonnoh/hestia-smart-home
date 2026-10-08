@@ -12,6 +12,9 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 from scipy.stats import gaussian_kde
 
+import samples as kde_samples
+from samples import KdeSample
+
 
 log = logging.getLogger(__name__)
 
@@ -32,9 +35,6 @@ TYPE_TO_DISTRIBUTION = {
     "meal": "meal_time",
     "hydration": "hydration_lag",
 }
-
-# 시각(자정 기준 분)이 아니라 경과 시간(duration_sec)을 쓰는 distribution
-DURATION_DISTRIBUTIONS = {"hydration_lag"}
 
 # Context Engine T0Entry와 같은 필드
 REQUIRED_FIELDS = (
@@ -73,8 +73,9 @@ def time_to_minutes(time_str: str) -> float:
 @dataclass(frozen=True)
 class T0Sample:
     """
-    KDE 학습 입력 한 건.
+    t0 로그 원본 레코드 한 건.
     Context Engine이 남기는 t0 로그(T0Entry) 한 줄과 같은 구조다.
+    KDE 입력으로 쓸 때는 t0_to_kde_samples()로 KdeSample로 바꾼다.
     """
 
     date: str
@@ -192,14 +193,9 @@ def load_t0_jsonl(path: Path) -> list[T0Sample]:
 
 def load_aruba_samples(
     path: Path = DATA_PATH,
-    type_: str = "meal",
-) -> list[T0Sample]:
+) -> list[KdeSample]:
     """
-    Aruba CSV(date,time,activity)를 t0 JSONL과 같은
-    T0Sample로 변환한다.
-
-    Aruba 시각을 KST 로컬 시각으로 간주해 epoch로 바꾸므로
-    다시 자정 기준 분으로 바꾸면 원래 시각과 같다.
+    Aruba breakfast CSV(date,time,activity) → meal_time KdeSample
     """
 
     samples = []
@@ -208,19 +204,12 @@ def load_aruba_samples(
         reader = csv.DictReader(f)
 
         for row in reader:
-            local = datetime.strptime(
-                f"{row['date']} {row['time']}",
-                "%Y-%m-%d %H:%M:%S.%f",
-            ).replace(tzinfo=KST)
-
             samples.append(
-                T0Sample(
+                KdeSample(
+                    distribution="meal_time",
+                    value=time_to_minutes(row["time"]),
                     date=row["date"],
-                    type=type_,
-                    t0=local.timestamp(),
                     source="aruba",
-                    prompted=False,
-                    duration_sec=0.0,
                 )
             )
 
@@ -242,25 +231,57 @@ def t0_to_minutes(t0: float) -> float:
     )
 
 
-def group_by_distribution(
-    samples: list[T0Sample],
-) -> dict[str, list[T0Sample]]:
+def t0_to_kde_sample(sample: T0Sample) -> KdeSample | None:
     """
-    type 기준으로 distribution별 sample을 나눈다.
-    알 수 없는 type(예: medication)은 KDE 대상이 아니므로 제외한다.
+    t0 레코드 한 건 → KdeSample
+    KDE 대상이 아닌 type이면 None.
+
+    - meal / wake: t0의 KST 자정 기준 분
+    - hydration  : duration_sec(기상 후 경과 시간)를 분으로 변환
     """
 
-    groups: dict[str, list[T0Sample]] = {}
+    distribution = TYPE_TO_DISTRIBUTION.get(sample.type)
+
+    if distribution is None:
+        return None
+
+    if kde_samples.is_time_of_day(distribution):
+        value = t0_to_minutes(sample.t0)
+    else:
+        value = sample.duration_sec / 60
+
+    return KdeSample(
+        distribution=distribution,
+        value=value,
+        date=sample.date,
+        source=sample.source,
+        prompted=sample.prompted,
+    )
+
+
+def t0_to_kde_samples(samples: list[T0Sample]) -> list[KdeSample]:
+    """
+    t0 레코드 목록 → KdeSample 목록
+
+    알 수 없는 type(예: medication, 명세에 없는 sleep)은 KDE 대상이 아니므로 제외한다.
+    변환할 수 없는 값(예: 범위를 벗어난 t0)은 경고 후 건너뛴다.
+    """
+
+    out = []
     unknown: set[str] = set()
 
     for sample in samples:
-        name = TYPE_TO_DISTRIBUTION.get(sample.type)
+        try:
+            converted = t0_to_kde_sample(sample)
+        except (ValueError, OverflowError, OSError) as exc:
+            log.warning("t0 레코드 변환 실패 — %s: %s", sample, exc)
+            continue
 
-        if name is None:
+        if converted is None:
             unknown.add(sample.type)
             continue
 
-        groups.setdefault(name, []).append(sample)
+        out.append(converted)
 
     if unknown:
         log.info(
@@ -268,43 +289,7 @@ def group_by_distribution(
             ", ".join(sorted(unknown)),
         )
 
-    return groups
-
-
-def sample_values(
-    distribution: str,
-    samples: list[T0Sample],
-) -> np.ndarray:
-    """
-    distribution에 맞는 KDE 입력값(분 단위)을 만든다.
-
-    - wake/meal/sleep_time: t0의 KST 자정 기준 분
-    - hydration_lag: duration_sec(기상 후 경과 시간)를 분으로 변환
-    """
-
-    if distribution in DURATION_DISTRIBUTIONS:
-        return np.array(
-            [s.duration_sec / 60 for s in samples]
-        )
-
-    return np.array(
-        [t0_to_minutes(s.t0) for s in samples]
-    )
-
-
-def build_training_input(
-    samples: list[T0Sample],
-) -> dict[str, np.ndarray]:
-    """
-    T0Sample 목록 → distribution별 KDE 입력값
-    """
-
-    return {
-        name: sample_values(name, group)
-        for name, group in group_by_distribution(
-            samples
-        ).items()
-    }
+    return out
 
 
 def load_times() -> np.ndarray:
@@ -313,9 +298,8 @@ def load_times() -> np.ndarray:
     자정 기준 분(minute) 단위로 읽는다.
     """
 
-    return sample_values(
-        "meal_time",
-        load_aruba_samples(),
+    return kde_samples.values(
+        load_aruba_samples()
     )
 
 
@@ -393,26 +377,24 @@ def calculate_predictability(
 
 
 def build_model(
-    samples: list[T0Sample] | None = None,
+    samples: list[KdeSample] | None = None,
 ) -> dict:
     """
     MQTT payload에 들어갈 KDE 모델 부분을 생성한다.
 
-    samples가 없으면 기존 Aruba breakfast 데이터를 사용한다.
-    TODO(Phase 2): meal_time 외 distribution 생성
+    samples는 출처(Aruba / synthetic / t0)와 무관한 공통 KdeSample이다.
+    없으면 기존 Aruba breakfast 데이터를 사용한다.
+    TODO(v2 Phase 5): meal_time 외 distribution 생성
     """
 
     if samples is None:
         samples = load_aruba_samples()
 
-    meal_samples = group_by_distribution(
+    meal_samples = kde_samples.group(
         samples
     ).get("meal_time", [])
 
-    times = sample_values(
-        "meal_time",
-        meal_samples,
-    )
+    times = kde_samples.values(meal_samples)
 
     kde = fit_kde(times)
 
@@ -423,8 +405,8 @@ def build_model(
     )
 
     return {
-        "sample_days": len(
-            {s.date for s in meal_samples}
+        "sample_days": kde_samples.sample_days(
+            meal_samples
         ),
         "distributions": {
             "meal_time": {
@@ -453,7 +435,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     model = build_model(
-        load_t0_jsonl(args.t0_jsonl)
+        t0_to_kde_samples(load_t0_jsonl(args.t0_jsonl))
         if args.t0_jsonl
         else None
     )
