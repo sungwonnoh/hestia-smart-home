@@ -683,6 +683,11 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         help="Aruba 원본(aruba.txt) — meal_time / sleep_time·wake_time(proxy)",
     )
     parser.add_argument(
+        "--sleep-jsonl",
+        type=Path,
+        help="내부 sleep / wake 레코드 JSONL — 밤잠만 골라 sleep_time / wake_time 학습",
+    )
+    parser.add_argument(
         "--synthetic-hydration",
         action="store_true",
         help="검증용 synthetic hydration_lag 추가",
@@ -709,6 +714,12 @@ def samples_from_args(args) -> list[KdeSample] | None:
 
         for series in extract_samples(args.aruba_raw).values():
             collected += series
+
+    if args.sleep_jsonl:
+        from sleep_sessions import load_records, samples_from_records
+
+        series, _ = samples_from_records(load_records(args.sleep_jsonl))
+        collected += series["sleep_time"] + series["wake_time"]
 
     if args.synthetic_hydration:
         from synthetic import generate_hydration_lag

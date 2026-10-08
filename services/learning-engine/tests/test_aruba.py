@@ -12,8 +12,6 @@ from aruba import (
     extract_meal,
     extract_samples,
     extract_sleep,
-    main_sleep_per_night,
-    merge_sleep_segments,
     pair_segments,
     parse_line,
     parse_ts,
@@ -183,52 +181,50 @@ def test_reversed_segment_is_dropped_not_corrected(caplog):
 # ============================================================ 수면 병합
 
 
-def segments_of(tmp_path, *lines):
-    log = read_events(write(tmp_path, *lines))
-    segments, _ = pair_segments(log.events, "Sleeping")
-    return segments, log.events
+def episodes_of(tmp_path, *lines, **kwargs):
+    """병합 후 수면 목록 (밤잠 + 낮잠)"""
+    return extract_sleep(read_events(write(tmp_path, *lines)), **kwargs).episodes
 
 
 def test_toilet_trip_merges_sleep(tmp_path):
     """화장실 다녀온 뒤 다시 잔 시각을 취침 시각으로 쓰면 안 된다."""
-    segments, events = segments_of(
+    episodes = episodes_of(
         tmp_path,
         *sleep_lines("2010-11-04 23:00:00.0", "2010-11-05 02:00:00.0"),
         *toilet_lines("2010-11-05 02:00:05.0", "2010-11-05 02:30:00.0"),
         *sleep_lines("2010-11-05 02:40:00.0", "2010-11-05 06:30:00.0"),
     )
-    episodes = merge_sleep_segments(segments, events)
     assert len(episodes) == 1
-    assert episodes[0].begin.hour == 23
+    assert episodes[0].start.hour == 23
     assert episodes[0].end.hour == 6
+    assert episodes[0].parts == 2
 
 
 def test_short_gap_merges_without_toilet(tmp_path):
-    segments, events = segments_of(
+    episodes = episodes_of(
         tmp_path,
         *sleep_lines("2010-11-05 00:02:00.0", "2010-11-05 00:34:00.0"),
         *sleep_lines("2010-11-05 00:36:00.0", "2010-11-05 07:34:00.0"),
     )
-    assert len(merge_sleep_segments(segments, events)) == 1
+    assert len(episodes) == 1
 
 
 def test_long_gap_without_toilet_splits(tmp_path):
-    segments, events = segments_of(
+    episodes = episodes_of(
         tmp_path,
         *sleep_lines("2010-11-05 14:00:00.0", "2010-11-05 15:00:00.0"),
         *sleep_lines("2010-11-05 23:00:00.0", "2010-11-06 07:00:00.0"),
     )
-    assert len(merge_sleep_segments(segments, events)) == 2
+    assert len(episodes) == 2
 
 
 def test_merge_gap_is_configurable(tmp_path):
-    segments, events = segments_of(
-        tmp_path,
+    lines = (
         *sleep_lines("2010-11-05 00:00:00.0", "2010-11-05 01:00:00.0"),
         *sleep_lines("2010-11-05 01:10:00.0", "2010-11-05 07:00:00.0"),
     )
-    assert len(merge_sleep_segments(segments, events, merge_gap_min=15)) == 1
-    assert len(merge_sleep_segments(segments, events, merge_gap_min=5)) == 2
+    assert len(episodes_of(tmp_path, *lines, merge_gap_min=15)) == 1
+    assert len(episodes_of(tmp_path, *lines, merge_gap_min=5)) == 2
 
 
 # ============================================================ 밤 / 날짜 경계
@@ -260,19 +256,9 @@ def test_nap_is_not_main_sleep(tmp_path):
     )
     s = extract_sleep(read_events(path))
     assert len(s.episodes) == 2
+    assert len(s.naps) == 1 and s.naps[0].start.hour == 14
     assert [hhmm(x) for x in s.sleep_time] == ["22:30"]
     assert [hhmm(x) for x in s.wake_time] == ["06:30"]
-
-
-def test_main_sleep_is_longest_per_night():
-    from aruba import Segment, SleepEpisode
-
-    def episode(b, e):
-        return SleepEpisode((Segment(ev(b, "Sleeping", "begin", 0), ev(e, "Sleeping", "end", 0)),))
-
-    long_ = episode("2010-11-05 23:00:00", "2010-11-06 07:00:00")
-    short = episode("2010-11-06 08:00:00", "2010-11-06 09:00:00")    # 같은 밤(정오 전)
-    assert main_sleep_per_night([long_, short]) == [long_]
 
 
 def test_truncated_last_night_has_no_wake(tmp_path):

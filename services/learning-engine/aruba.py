@@ -9,6 +9,10 @@ sleep_time / wake_time 은 HESTIA Context Engine 이 생성한 t0 가 아니라
 공개 데이터셋의 활동 라벨에서 만든 proxy 다. 실제 sleep t0 계약이
 정해지면 그 입력으로 교체한다.
 
+밤잠 / 낮잠 구분과 구간 병합은 sleep_sessions.py 가 한다 (출처 무관).
+이 모듈은 CASAS 원본 파싱과 라벨 → SleepSession 변환까지만 맡는다.
+다른 CASAS 데이터셋(Milan / Cairo / Tulum2)은 casas.py 가 같은 파서를 쓴다.
+
 원본 형식 (공백/탭 구분):
 
     2010-11-04 00:03:50.209589 M003 ON Sleeping begin   ← 라벨 줄 (6칸)
@@ -27,10 +31,23 @@ import argparse
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from samples import KdeSample
+from sleep_sessions import (
+    MERGE_GAP_MIN,
+    NIGHT_ANCHOR_HOUR,
+    ClassifiedSession,
+    SleepSession,
+    classify_sessions,
+    clock_minutes,
+    drop_implausible,
+    merge_sessions,
+    naps,
+    night_samples,
+    nights,
+)
 
 
 log = logging.getLogger(__name__)
@@ -41,15 +58,6 @@ RAW_PATH = Path("data/raw/casas/aruba/aruba.txt")
 MEAL_LABEL = "Meal_Preparation"
 SLEEP_LABEL = "Sleeping"
 TOILET_LABEL = "Bed_to_Toilet"
-
-# 수면 구간 사이 간격이 이 이하이면 한 번의 수면으로 합친다.
-# Aruba 구간 간격 185건 중 162건이 10분 미만이고 15분 이후는 드문드문하다.
-# 팀 검토 전 잠정값이므로 인자로 바꿀 수 있게 둔다.
-MERGE_GAP_MIN = 15.0
-
-# 하룻밤의 경계. 이 시각부터 다음 날 이 시각 전까지를 같은 밤으로 본다.
-# Aruba 수면 시작 시각은 08~13시에 거의 없다 (401건 중 2건).
-NIGHT_ANCHOR_HOUR = 12
 
 
 @dataclass(frozen=True)
@@ -70,48 +78,6 @@ class Segment:
     @property
     def minutes(self) -> float:
         return (self.end.ts - self.begin.ts).total_seconds() / 60
-
-
-@dataclass(frozen=True)
-class SleepEpisode:
-    """
-    화장실 등으로 잠깐 끊긴 Sleeping 구간들을 합친 한 번의 수면.
-    """
-
-    segments: tuple[Segment, ...]
-
-    @property
-    def begin(self) -> datetime:
-        return self.segments[0].begin.ts
-
-    @property
-    def end(self) -> datetime:
-        return self.segments[-1].end.ts
-
-    @property
-    def minutes(self) -> float:
-        return (self.end - self.begin).total_seconds() / 60
-
-    def night(self, anchor_hour: int = NIGHT_ANCHOR_HOUR) -> str:
-        """
-        이 수면이 속한 밤의 날짜.
-        00:30 에 잠들었으면 전날 밤이다.
-        """
-
-        return (
-            self.begin - timedelta(hours=anchor_hour)
-        ).date().isoformat()
-
-
-def clock_minutes(ts: datetime) -> float:
-    """Aruba 로컬 시각 → 자정 기준 분"""
-
-    return (
-        ts.hour * 60
-        + ts.minute
-        + ts.second / 60
-        + ts.microsecond / 60_000_000
-    )
 
 
 def time_sample(
@@ -152,34 +118,34 @@ class SleepExtraction:
     """sleep/wake 추출 결과와 중간 산출물. 검증·보고용."""
 
     segments: list[Segment] = field(default_factory=list)
-    episodes: list[SleepEpisode] = field(default_factory=list)
-    main: list[SleepEpisode] = field(default_factory=list)
+    classified: list[ClassifiedSession] = field(default_factory=list)
     dropped_segments: int = 0
-    last_line_no: int | None = None
+    implausible: list[SleepSession] = field(default_factory=list)   # 24시간 이상 — 기록 오류
+    source: str = "aruba"
 
-    def truncated(self, episode: SleepEpisode) -> bool:
-        """
-        Sleeping end 가 파일 마지막 줄에 붙어 있으면 실제 기상이 아니라
-        기록 종료로 닫힌 것이다 (원본 2011-06-11 23:58).
-        취침 시각은 유효하지만 기상 시각은 쓸 수 없다.
-        """
+    @property
+    def episodes(self) -> list[SleepSession]:
+        """병합한 수면 전체 (밤잠 + 낮잠)"""
 
-        return episode.segments[-1].end.line_no == self.last_line_no
+        return [c.session for c in self.classified]
+
+    @property
+    def main(self) -> list[SleepSession]:
+        """밤잠"""
+
+        return [c.session for c in nights(self.classified)]
+
+    @property
+    def naps(self) -> list[SleepSession]:
+        return [c.session for c in naps(self.classified)]
 
     @property
     def sleep_time(self) -> list[KdeSample]:
-        return [
-            time_sample("sleep_time", e.night(), e.begin, proxy=True)
-            for e in self.main
-        ]
+        return night_samples(self.classified, self.source, proxy=True)["sleep_time"]
 
     @property
     def wake_time(self) -> list[KdeSample]:
-        return [
-            time_sample("wake_time", e.end.date().isoformat(), e.end, proxy=True)
-            for e in self.main
-            if not self.truncated(e)
-        ]
+        return night_samples(self.classified, self.source, proxy=True)["wake_time"]
 
 
 # ==================================================================== 파싱
@@ -328,71 +294,73 @@ def pair_segments(
 # ==================================================================== 수면
 
 
-def merge_sleep_segments(
+def segments_to_sessions(
     segments: list[Segment],
-    events: list[ActivityEvent],
-    merge_gap_min: float = MERGE_GAP_MIN,
-) -> list[SleepEpisode]:
+    last_line_no: int | None = None,
+) -> list[SleepSession]:
     """
-    Aruba 는 밤중에 화장실을 다녀오면 Sleeping 이 끊겼다가 다시 시작된다.
-    끊긴 begin 을 취침 시각으로 쓰면 sleep_time 분포가 새벽 쪽으로 오염되므로
-    다음 중 하나면 한 번의 수면으로 합친다.
+    라벨 구간 → SleepSession.
 
-      - 두 구간 사이에 Bed_to_Toilet 이 있다
-      - 두 구간 사이 간격이 merge_gap_min 이하
+    end 라벨이 파일 마지막 줄에 붙어 있으면 실제 기상이 아니라
+    기록 종료로 닫힌 것이다 (Aruba 원본 2011-06-11 23:58).
+    취침 시각은 유효하지만 기상 시각은 쓸 수 없다.
     """
 
-    if not segments:
-        return []
-
-    toilet_lines = [
-        e.line_no
-        for e in events
-        if e.label == TOILET_LABEL and e.kind == "begin"
+    return [
+        SleepSession(
+            start=seg.begin.ts,
+            end=seg.end.ts,
+            wake_observed=seg.end.line_no != last_line_no,
+        )
+        for seg in segments
     ]
 
-    def toilet_between(a: Segment, b: Segment) -> bool:
-        return any(
-            a.end.line_no < n < b.begin.line_no
-            for n in toilet_lines
-        )
 
-    episodes = []
-    current = [segments[0]]
+def label_times(
+    events: list[ActivityEvent],
+    label: str | None,
+) -> list[datetime]:
+    """라벨 begin 시각 목록. 병합 bridge(예: Bed_to_Toilet)에 쓴다."""
 
-    for seg in segments[1:]:
-        prev = current[-1]
-        gap = (seg.begin.ts - prev.end.ts).total_seconds() / 60
+    if label is None:
+        return []
 
-        if 0 <= gap <= merge_gap_min or (gap >= 0 and toilet_between(prev, seg)):
-            current.append(seg)
-        else:
-            episodes.append(SleepEpisode(tuple(current)))
-            current = [seg]
-
-    episodes.append(SleepEpisode(tuple(current)))
-
-    return episodes
+    return [e.ts for e in events if e.label == label and e.kind == "begin"]
 
 
-def main_sleep_per_night(
-    episodes: list[SleepEpisode],
+def extract_session_label(
+    aruba_log: ArubaLog,
+    sleep_label: str,
+    toilet_label: str | None,
+    source: str,
+    merge_gap_min: float = MERGE_GAP_MIN,
     anchor_hour: int = NIGHT_ANCHOR_HOUR,
-) -> list[SleepEpisode]:
+) -> SleepExtraction:
     """
-    밤마다 가장 긴 수면 하나를 주 수면으로 고른다.
-    낮잠은 같은 밤 범위에서 주 수면보다 짧으므로 빠진다.
+    수면을 begin~end 구간 라벨로 기록한 CASAS 데이터셋 (Aruba, Milan, Tulum2).
+
+    Aruba 는 밤중에 화장실을 다녀오면 Sleeping 이 끊겼다가 다시 시작된다.
+    끊긴 begin 을 취침 시각으로 쓰면 sleep_time 분포가 새벽 쪽으로 오염되므로
+    toilet_label 이 사이에 있거나 간격이 짧으면 합친다.
     """
 
-    best: dict[str, SleepEpisode] = {}
+    segments, dropped = pair_segments(aruba_log.events, sleep_label)
 
-    for episode in episodes:
-        night = episode.night(anchor_hour)
+    sessions, implausible = drop_implausible(
+        merge_sessions(
+            segments_to_sessions(segments, aruba_log.last_line_no),
+            merge_gap_min,
+            bridges=label_times(aruba_log.events, toilet_label),
+        )
+    )
 
-        if night not in best or episode.minutes > best[night].minutes:
-            best[night] = episode
-
-    return [best[k] for k in sorted(best)]
+    return SleepExtraction(
+        segments=segments,
+        classified=classify_sessions(sessions, anchor_hour),
+        dropped_segments=dropped,
+        implausible=implausible,
+        source=source,
+    )
 
 
 def extract_sleep(
@@ -400,16 +368,13 @@ def extract_sleep(
     merge_gap_min: float = MERGE_GAP_MIN,
     anchor_hour: int = NIGHT_ANCHOR_HOUR,
 ) -> SleepExtraction:
-    events = aruba_log.events
-    segments, dropped = pair_segments(events, SLEEP_LABEL)
-    episodes = merge_sleep_segments(segments, events, merge_gap_min)
-
-    return SleepExtraction(
-        segments=segments,
-        episodes=episodes,
-        main=main_sleep_per_night(episodes, anchor_hour),
-        dropped_segments=dropped,
-        last_line_no=aruba_log.last_line_no,
+    return extract_session_label(
+        aruba_log,
+        SLEEP_LABEL,
+        TOILET_LABEL,
+        "aruba",
+        merge_gap_min,
+        anchor_hour,
     )
 
 
@@ -483,13 +448,15 @@ def report(path: Path = RAW_PATH) -> None:
     print(f"  segments          : {len(sleep.segments)} (dropped {sleep.dropped_segments})")
     print(f"  merged episodes   : {len(sleep.episodes)}")
     print(f"  nights (main)     : {len(sleep.main)}")
+    print(f"  naps              : {len(sleep.naps)}")
+    print(f"  implausible (>=24h): {len(sleep.implausible)}")
 
     durations = sorted(e.minutes for e in sleep.main)
     short = [d for d in durations if d < 180]
     print(f"  main < 3h         : {len(short)}")
     print(f"  main median       : {durations[len(durations) // 2] / 60:.1f}h")
-    print(f"  crosses midnight  : {sum(e.begin.date() != e.end.date() for e in sleep.main)}")
-    print(f"  truncated (no wake): {sum(sleep.truncated(e) for e in sleep.main)}")
+    print(f"  crosses midnight  : {sum(e.start.date() != e.end.date() for e in sleep.main)}")
+    print(f"  truncated (no wake): {sum(not e.wake_observed for e in sleep.main)}")
 
     print("\n===== Samples =====")
     print(f"  meal_time         : {_summary(meal)}")
