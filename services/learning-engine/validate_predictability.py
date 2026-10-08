@@ -8,6 +8,7 @@ predictability = 1 - H / H_max 가 규칙성을 제대로 표현하는지 확인
     2. 표본 수에 따른 변화
     3. Aruba 실제 데이터 (meal / breakfast / wake·sleep proxy)
     4. hydration_lag regular / irregular (synthetic)
+    5. CASAS 거주자별 sleep / wake (Aruba / Milan / Tulum2 / Cairo, proxy)
 
 seed를 고정하므로 같은 환경에서 다시 돌리면 같은 표가 나온다.
 임계값(policy.toml)은 바꾸지 않는다. 결과는 판단 근거로만 쓴다.
@@ -233,6 +234,55 @@ def hydration_rows(seeds: int = DEFAULT_SEEDS) -> list[Row]:
     return rows
 
 
+def casas_rows(raw_dir: Path | None) -> tuple[list[dict], str | None]:
+    """
+    CASAS 거주자별 실제 sleep / wake predictability.
+    한 사람(Aruba)만으로는 규칙적 / 불규칙한 사람의 차이를 실제 데이터로 볼 수 없다.
+    """
+
+    if raw_dir is None:
+        return [], "CASAS 원본 경로 없음 — 생략"
+
+    import casas
+
+    found = casas.extract_all(raw_dir)
+
+    if not found:
+        return [], f"CASAS 원본 없음 ({raw_dir}) — 생략"
+
+    rows = []
+
+    for spec, sleep in found:
+        r = casas.person_summary(spec, sleep)
+
+        for name, samples in (("sleep_time", sleep.sleep_time), ("wake_time", sleep.wake_time)):
+            r[f"{name}_std"] = float(np.std(unwrap_circular(values(samples)))) if samples else None
+
+        r["note"] = spec.note
+        rows.append(r)
+
+    return rows, None
+
+
+def casas_table(rows: list[dict]) -> str:
+    out = [
+        "| 거주자 | 밤 | 낮잠 | 제외 (≥24h) | 수면 중앙값 (h) | sleep 실제 std (분) | sleep_time | wake 실제 std (분) | wake_time |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+
+    def f(v, digits):
+        return "—" if v is None else f"{v:.{digits}f}"
+
+    for r in rows:
+        out.append(
+            f"| {r['key']} | {r['nights']} | {r['naps']} | {r['implausible']} | {r['median_hours']:.1f} "
+            f"| {f(r['sleep_time_std'], 1)} | {f(r['sleep_time'], 3)} "
+            f"| {f(r['wake_time_std'], 1)} | {f(r['wake_time'], 3)} |"
+        )
+
+    return "\n".join(out)
+
+
 # ==================================================================== 출력
 
 
@@ -271,10 +321,12 @@ def render(
     raw_path: Path | None = RAW_PATH,
     breakfast_path: Path = DATA_PATH,
 ) -> str:
+    """raw_path 와 같은 디렉터리의 다른 CASAS 원본도 쓴다 (5절)."""
     sweep = time_of_day_sweep(seeds)
     sizes = sample_size_sweep(seeds)
     midnight = midnight_check(seeds)
     aruba, aruba_note = aruba_rows(raw_path, breakfast_path)
+    people, casas_note = casas_rows(raw_path.parent if raw_path is not None else None)
     hydration = hydration_rows(seeds)
 
     h_day = math.log(grid_for("meal_time").size)
@@ -334,7 +386,26 @@ def render(
         "> hydration_lag 는 칸 수(24)가 시각 분포(96)와 달라 H_max 가 다르다. "
         "predictability 값을 시각 분포와 직접 비교하지 않는다.",
         "",
+        "## 5. CASAS 거주자별 sleep / wake (proxy)",
+        "",
+        "Aruba 한 사람만으로는 규칙적 / 불규칙한 사람의 차이를 실제 데이터로 볼 수 없어 "
+        "다른 CASAS 데이터셋의 거주자를 더했다. 밤마다 가장 긴 수면을 밤잠으로 골라 "
+        "취침(sleep_time) / 기상(wake_time) 을 학습한다. 24시간 이상 수면은 기록 오류로 제외.",
+        "",
     ]
+
+    if casas_note:
+        parts += [f"> {casas_note}", ""]
+    else:
+        parts += [
+            casas_table(people),
+            "",
+            "- Tulum2 / Cairo 는 2인 가구다. 거주자별 라벨을 따로 쓴다.",
+            "- Cairo 의 `R1_Sleep` / `R1_Wake` 는 잠자리에 드는 / 일어나는 짧은 활동이다. "
+            "취침 활동 시작 ~ 다음 기상 활동 시작을 수면으로 해석했다.",
+            "- 실제 std 는 원을 펼친 값의 표준편차다. 1절 synthetic 표와 같은 기준으로 비교할 수 있다.",
+            "",
+        ]
 
     return "\n".join(parts)
 

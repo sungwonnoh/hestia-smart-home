@@ -52,3 +52,9 @@ def test_render_without_raw():
     for heading in ("## 1.", "## 2.", "## 3.", "## 4."):
         assert heading in text
     assert "Aruba 원본 없음" in text
+
+
+def test_casas_rows_without_raw(tmp_path):
+    rows, note = vp.casas_rows(tmp_path)
+    assert rows == [] and "없음" in note
+    assert vp.casas_rows(None)[0] == []

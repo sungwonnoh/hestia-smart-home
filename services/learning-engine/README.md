@@ -26,8 +26,10 @@ Context Engine이 판단할 때 쓰는 "이 사람의 평소 시간 패턴"을 �
 | 출처 | 모듈 | 분포 | 비고 |
 |---|---|---|---|
 | CASAS Aruba | `aruba.py` | meal / sleep / wake | sleep·wake는 `Sleeping` 라벨 **proxy** |
-| synthetic | `synthetic.py` | hydration_lag | Aruba에 수분 섭취 라벨 없음. **검증용 fixture** |
+| CASAS Milan / Tulum2 / Cairo | `casas.py` | sleep / wake | 거주자별 **proxy**. predictability 비교·검증용 |
+| synthetic | `synthetic.py` | hydration_lag | CASAS에 수분 섭취 라벨 없음. **검증용 fixture** |
 | Context Engine t0 | `baseline.py` | meal / wake / hydration | 현재 t0 명세에 `sleep` type 없음 |
+| 내부 sleep / wake 레코드 | `sleep_sessions.py` | sleep / wake | SLEEP.md 형식. production schema 아님 |
 
 모든 출처는 공통 표본 `KdeSample`(`samples.py`)로 바뀐 뒤 같은 KDE를 탑니다.
 
@@ -36,6 +38,32 @@ aruba.py      ─┐
 synthetic.py  ─┼─→ KdeSample ─→ fit_distribution ─→ density + predictability
 t0 adapter    ─┘
 ```
+
+## 수면: 밤잠 / 낮잠 구분 (학습 데이터 선별)
+
+`sleep_time` / `wake_time`은 **밤잠만** 학습합니다. 구분은 `sleep_sessions.py`가 RPi4 배치에서 합니다.
+지금 이 수면이 밤잠인지 실시간으로 판정하는 일은 RPi5 Context Engine 담당입니다.
+
+```text
+수면 기록 (CASAS 라벨 / 내부 sleep 레코드)
+  ↓ merge_sessions      화장실 등으로 끊긴 구간 병합 (간격 ≤ 15분 또는 Bed_to_Toilet)
+  ↓ drop_implausible    24시간 이상은 기록 오류로 제외
+  ↓ classify_sessions   정오~다음 날 정오마다 가장 긴 수면 = 밤잠, 나머지 = 낮잠
+  ↓ night_samples       밤잠의 시작 → sleep_time, 끝 → wake_time
+```
+
+- 고정 취침·기상 시각을 쓰지 않습니다.
+- 기상이 관측되지 않은 수면(기록 종료 등)은 취침 시각만 학습합니다.
+- 알려진 한계: 그 밤의 수면 기록이 없으면 오후 낮잠이 밤잠으로 분류됩니다 (CASAS 6명 631밤 중 1건).
+
+내부 sleep 레코드 (production `hestia/log/t0` 아님):
+
+```json
+{"date": "2010-11-03", "type": "sleep", "t0": "2010-11-04T00:03:50", "source": "aruba", "prompted": false, "duration_sec": 28642}
+{"date": "2010-11-04", "type": "wake",  "t0": "2010-11-04T08:01:12", "source": "aruba", "prompted": false, "duration_sec": 0}
+```
+
+`sleep`의 `duration_sec`은 수면 길이입니다. 끝 시각과 같은 `wake` 레코드가 있어야 기상 시각을 학습합니다.
 
 ## 실행
 
@@ -52,8 +80,14 @@ python3 services/learning-engine/baseline.py \
 # Context Engine t0 로그
 python3 services/learning-engine/baseline.py --t0-jsonl /data/hestia/t0_log.jsonl
 
+# 내부 sleep / wake 레코드로 학습 (밤잠만)
+python3 services/learning-engine/baseline.py --sleep-jsonl sleep.jsonl
+
 # Aruba 원본 라벨·표본 수 확인
 python3 services/learning-engine/aruba.py
+
+# CASAS 거주자별 sleep / wake 요약, 내부 레코드 JSONL 내보내기
+python3 services/learning-engine/casas.py --export-jsonl /tmp/sleep_jsonl
 
 # 특정 시각의 tail probability 조회 (breakfast meal_time)
 python3 services/learning-engine/debug_kde_query.py --time 09:40
@@ -68,6 +102,36 @@ payload는 발행 전에 명세(필수 필드, 격자, density 합 1, predictabi
 학습할 수 없는 distribution은 빈 배열 대신 키를 빼고 보냅니다. Context Engine은 일부만 온 payload도 받습니다.
 
 Aruba 원본(`data/raw/`)은 gitignore 대상입니다. 받는 방법은 [`docs/dataset-setup.md`](../../docs/dataset-setup.md)를 참고하세요.
+
+## 설치
+
+```bash
+pip install -r services/learning-engine/requirements.txt        # 실행
+pip install -r services/learning-engine/requirements-dev.txt    # + pytest
+cd services/learning-engine && python3 -m pytest tests -q
+```
+
+Python 3.9 이상. Context Engine 계약 테스트는 Python 3.11 이상에서만 돌고 그 외에는 건너뜁니다.
+
+## RPi E2E 확인 (SLEEP.md §10)
+
+```bash
+# RPi4: 학습 → 발행
+python3 services/learning-engine/mqtt_publisher.py --host <broker> \
+    --aruba-raw data/raw/casas/aruba/aruba.txt --synthetic-hydration
+
+# 어디서든: retained 모델 수신·검증 (sleep_time / wake_time 필수)
+python3 services/learning-engine/verify_model.py --host <broker>
+#   종료 코드 0 통과 / 1 검증 실패 / 2 수신 없음
+
+# RPi5: 보관 확인 → 재시작 → retained 복구 확인
+journalctl -u hestia-engine | grep "모델 갱신: kde"
+sudo systemctl restart hestia-engine
+journalctl -u hestia-engine -n 50 | grep "모델 갱신: kde"
+
+# 테스트 후 개발용 retained 모델 삭제 (RPi5 는 재시작해야 메모리에서도 비워짐)
+mosquitto_pub -h <broker> -t hestia/model/kde -r -n
+```
 
 ## Predictability
 
@@ -97,6 +161,8 @@ python3 services/learning-engine/validate_predictability.py \
 | meal 전체 (1606건, 아침·점심·저녁) | 0.070 |
 | wake_time (proxy) | 0.319 |
 | sleep_time (proxy) | 0.347 |
+
+CASAS 6명 (proxy): sleep_time 0.342 ~ 0.524, wake_time 0.317 ~ 0.386 (표 5절).
 
 - std가 커질수록 predictability가 일관되게 감소합니다.
 - 자정 중심 분포도 낮 중심과 같은 값이 나옵니다 (circular).
