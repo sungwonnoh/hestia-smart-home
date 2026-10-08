@@ -137,10 +137,15 @@ def test_type_maps_to_distribution():
     groups = group_by_distribution([
         sample(type="wake"),
         sample(type="meal"),
-        sample(type="sleep"),
         sample(type="hydration"),
     ])
-    assert set(groups) == {"wake_time", "meal_time", "sleep_time", "hydration_lag"}
+    assert set(groups) == {"wake_time", "meal_time", "hydration_lag"}
+
+
+def test_sleep_t0_is_not_mapped():
+    """현재 t0 명세에 sleep type 이 없다. 합의 전에는 학습에 넣지 않는다."""
+    groups = group_by_distribution([sample(type="sleep"), sample(type="meal")])
+    assert list(groups) == ["meal_time"]
 
 
 def test_unknown_type_is_excluded_from_kde():

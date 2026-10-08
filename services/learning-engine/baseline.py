@@ -25,10 +25,11 @@ DATA_PATH = Path(
 KST = timezone(timedelta(hours=9))
 
 # t0 JSONL의 type → KDE distribution 이름
+# 현재 hestia/log/t0 명세의 type은 meal / wake / hydration 뿐이다.
+# sleep t0는 팀 합의 전이므로 매핑하지 않는다 (sleep_time은 Aruba proxy로 학습).
 TYPE_TO_DISTRIBUTION = {
     "wake": "wake_time",
     "meal": "meal_time",
-    "sleep": "sleep_time",
     "hydration": "hydration_lag",
 }
 
