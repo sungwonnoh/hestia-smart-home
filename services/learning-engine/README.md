@@ -107,6 +107,31 @@ python3 services/learning-engine/validate_predictability.py \
 현재 스케일에서는 std 120분도 0.225라 사실상 모두 통과합니다.
 새 값은 위 결과를 근거로 팀에서 정합니다 (이 모듈에서 수정하지 않음).
 
+## 고도화 옵션 (기본 꺼짐)
+
+`weighting.py`. 값은 실험으로 정하며 모듈에 기본값을 두지 않습니다.
+
+| 옵션 | 식 | 설정 |
+|---|---|---|
+| Recent weighting | `weight = exp(-λ · age_days)` | `SampleWeighting(recent_lambda=λ)` |
+| Prompted attenuation | prompted 표본만 `weight × w` (0 < w ≤ 1, 완전 제외 안 함) | `SampleWeighting(prompted_weight=w)` |
+| Cold start blending | `α · personal + (1 − α) · prior`, `α = days / (days + half_days)` | `ColdStart(half_days, priors={name: density})` |
+
+```python
+from baseline import build_model
+from weighting import ColdStart, SampleWeighting
+
+build_model(
+    samples,
+    sample_weighting=SampleWeighting(recent_lambda=0.05, prompted_weight=0.3),
+    cold_start=ColdStart(half_days=14, priors={"meal_time": prior_96}),
+)
+```
+
+- 가중치를 쓰면 bandwidth도 유효 표본 수(Kish) 기준으로 계산됩니다 (`meta[...]["weighting"]["effective_samples"]`).
+- prior는 외부에서 주입합니다. prior가 없는 distribution은 개인 분포를 그대로 씁니다.
+- predictability는 섞은 뒤의 최종 density로 계산합니다.
+
 ## 역할 분담
 
 ```text

@@ -142,7 +142,7 @@ def test_build_model_four_distributions():
 def test_build_model_metadata():
     model = build_model(four_distributions())
     assert model["meta"]["hydration_lag"] == {
-        "samples": 60, "sample_days": 60, "sources": ["synthetic"], "proxy": False,
+        "samples": 60, "sample_days": 60, "sources": ["synthetic"], "proxy": False, "prompted": 0,
     }
     assert model["meta"]["wake_time"]["sources"] == ["sensor"]
 
