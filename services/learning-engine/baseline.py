@@ -52,6 +52,90 @@ GRID_MIN = 0
 GRID_STEP = 15
 GRID_SIZE = 24 * 60 // GRID_STEP  # 96칸
 
+# hydration_lag 격자: 기상 후 0분부터 5분 간격 (MQTT 명세).
+# 끝값은 명세에 없다. Context Engine 은 기상 후 hydration_window_sec(7200초) 안의
+# 급수만 t0 로 남기므로 실제 hydration_lag 는 120분을 넘지 않는다.
+HYDRATION_GRID_STEP = 5
+HYDRATION_GRID_MAX_MIN = 120
+
+# gaussian_kde 가 계산 가능한 최소 표본 수 (수학적 하한).
+# 학습 신뢰도를 위한 최소 일수는 실험 없이 정하지 않는다.
+MIN_SAMPLES = 2
+
+
+@dataclass(frozen=True)
+class Grid:
+    """density 배열의 격자. 각 칸의 값은 칸 중앙에서 계산한다."""
+
+    grid_min: float
+    grid_step: float
+    size: int
+
+    def centers(self) -> np.ndarray:
+        return (
+            self.grid_min
+            + np.arange(self.size) * self.grid_step
+            + self.grid_step / 2
+        )
+
+    def to_payload(self) -> dict:
+        return {
+            "grid_min": self.grid_min,
+            "grid_step": self.grid_step,
+        }
+
+
+TIME_OF_DAY_GRID = Grid(GRID_MIN, GRID_STEP, GRID_SIZE)
+
+
+def grid_for(
+    distribution: str,
+    hydration_max_min: float = HYDRATION_GRID_MAX_MIN,
+) -> Grid:
+    if kde_samples.is_time_of_day(distribution):
+        return TIME_OF_DAY_GRID
+
+    return Grid(
+        0,
+        HYDRATION_GRID_STEP,
+        int(hydration_max_min // HYDRATION_GRID_STEP),
+    )
+
+
+# 시각 분포의 주기 (분). 23:50과 00:10은 20분 차이다.
+PERIOD_MIN = kde_samples.MINUTES_PER_DAY
+
+# circular density를 계산할 때 더하는 주기 범위.
+# 펼친 표본은 [0, 2880) 안에 있고, 앞뒤 한 바퀴씩 여유를 둔다.
+WRAP_SHIFTS = range(-2, 4)
+
+
+def unwrap_circular(
+    values: np.ndarray,
+    period: float = PERIOD_MIN,
+) -> np.ndarray:
+    """
+    원 위의 시각을 끊김 없는 직선 값으로 펼친다.
+
+    표본 사이 가장 큰 빈 구간을 자르는 곳으로 삼는다.
+    23:00 / 00:30 취침은 1380 / 1470 이 되어 90분 차이로 이어진다.
+    자정에서 자르면 bandwidth가 1440분짜리 분산으로 계산된다.
+    """
+
+    x = np.mod(np.asarray(values, dtype=float), period)
+    ordered = np.sort(x)
+
+    gaps = np.diff(
+        np.append(ordered, ordered[0] + period)
+    )
+    cut = ordered[(int(np.argmax(gaps)) + 1) % len(ordered)]
+
+    return np.where(x >= cut, x, x + period)
+
+
+class InsufficientSamples(ValueError):
+    """이 distribution은 KDE를 계산할 수 없다. 모델에서 빼고 이유를 남긴다."""
+
 
 def time_to_minutes(time_str: str) -> float:
     """
@@ -304,35 +388,57 @@ def load_times() -> np.ndarray:
 
 
 def fit_kde(times: np.ndarray):
-    if len(times) < 2:
-        raise ValueError(
-            "KDE 계산을 위한 데이터가 부족합니다."
+    times = np.asarray(times, dtype=float)
+
+    if len(times) < MIN_SAMPLES:
+        raise InsufficientSamples(
+            f"KDE 계산을 위한 데이터가 부족합니다 ({len(times)}개)."
         )
 
-    return gaussian_kde(times)
+    if not np.isfinite(times).all():
+        raise ValueError(
+            "KDE 입력에 NaN/inf가 있습니다."
+        )
+
+    try:
+        return gaussian_kde(times)
+    except np.linalg.LinAlgError as exc:
+        # 값이 전부 같으면 분산이 0이라 bandwidth를 정할 수 없다.
+        raise InsufficientSamples(
+            "KDE 입력의 분산이 0입니다 (모든 값이 같음)."
+        ) from exc
 
 
-def build_density(kde) -> list[float]:
+def build_density(
+    kde,
+    grid: Grid = TIME_OF_DAY_GRID,
+    period: float | None = None,
+) -> list[float]:
     """
-    하루를 15분 단위 96칸으로 나누고
-    각 칸의 KDE density를 계산한다.
+    격자 각 칸 중앙에서 KDE density를 계산한다.
+    기본은 하루를 15분 단위 96칸으로 나눈 격자다.
+
+    period를 주면 원(circular) 위의 density다.
+    각 칸에 한 바퀴씩 옮긴 위치의 density를 더해 자정에서 끊기지 않게 한다.
 
     최종 배열의 합은 1.0이 되도록 정규화한다.
     """
 
-    # 각 bin 중앙 시각
-    grid = (
-        np.arange(GRID_SIZE) * GRID_STEP
-        + GRID_STEP / 2
-    )
+    centers = grid.centers()
 
-    density = kde(grid)
+    if period is None:
+        density = kde(centers)
+    else:
+        density = sum(
+            kde(centers + k * period)
+            for k in WRAP_SHIFTS
+        )
 
     density_sum = density.sum()
 
-    if density_sum == 0:
-        raise ValueError(
-            "KDE density 합이 0입니다."
+    if not np.isfinite(density_sum) or density_sum <= 0:
+        raise InsufficientSamples(
+            "격자 범위 안의 KDE density 합이 0입니다."
         )
 
     normalized_density = (
@@ -342,16 +448,46 @@ def build_density(kde) -> list[float]:
     return normalized_density.tolist()
 
 
-def calculate_predictability(
+def fit_distribution(
+    distribution: str,
+    values: np.ndarray,
+    hydration_max_min: float = HYDRATION_GRID_MAX_MIN,
+) -> tuple[Grid, list[float]]:
+    """
+    distribution 하나의 공통 KDE fitting.
+    출처와 무관하게 숫자 배열만 받는다.
+
+    - time_of_day (wake/sleep/meal): circular KDE. 1440분 주기.
+    - elapsed (hydration_lag): 직선 KDE. 경과 시간은 이어지지 않는다.
+
+    여기서 다루는 것은 fitting의 circularity뿐이다.
+    개입용 tail probability의 circular 정의는 Context Engine
+    model.tail_probability(wrap=...)의 미결 사항으로 남긴다.
+    """
+
+    grid = grid_for(distribution, hydration_max_min)
+    values = np.asarray(values, dtype=float)
+
+    if not kde_samples.is_time_of_day(distribution):
+        return grid, build_density(fit_kde(values), grid)
+
+    # 펼치기 전에 개수·NaN 검증을 먼저 받는다.
+    if len(values) < MIN_SAMPLES or not np.isfinite(values).all():
+        fit_kde(values)
+
+    density = build_density(
+        fit_kde(unwrap_circular(values)),
+        grid,
+        period=PERIOD_MIN,
+    )
+
+    return grid, density
+
+
+def calculate_entropy(
     density: list[float],
 ) -> float:
-    """
-    정규화된 density 배열의 entropy를 이용해
-    predictability를 계산한다.
-
-    1에 가까울수록 규칙적,
-    0에 가까울수록 불규칙.
-    """
+    """정규화된 density 배열의 Shannon entropy (nats)"""
 
     probability = np.array(density)
 
@@ -359,11 +495,30 @@ def calculate_predictability(
         probability > 0
     ]
 
-    entropy = -np.sum(
-        probability * np.log(probability)
+    return float(
+        -np.sum(probability * np.log(probability))
     )
 
-    max_entropy = np.log(GRID_SIZE)
+
+def calculate_predictability(
+    density: list[float],
+) -> float:
+    """
+    정규화된 density 배열의 entropy를 이용해
+    predictability를 계산한다.
+
+        predictability = 1 - H / H_max
+
+    H_max는 그 격자의 칸 수 기준이다 (시각 분포 96칸, hydration 24칸).
+    칸 수가 다르면 H_max가 달라 distribution 간 값을 직접 비교할 수 없다.
+
+    1에 가까울수록 규칙적,
+    0에 가까울수록 불규칙.
+    """
+
+    entropy = calculate_entropy(density)
+
+    max_entropy = np.log(len(density))
 
     normalized_entropy = (
         entropy / max_entropy
@@ -378,47 +533,108 @@ def calculate_predictability(
 
 def build_model(
     samples: list[KdeSample] | None = None,
+    hydration_max_min: float = HYDRATION_GRID_MAX_MIN,
 ) -> dict:
     """
     MQTT payload에 들어갈 KDE 모델 부분을 생성한다.
 
     samples는 출처(Aruba / synthetic / t0)와 무관한 공통 KdeSample이다.
-    없으면 기존 Aruba breakfast 데이터를 사용한다.
-    TODO(v2 Phase 5): meal_time 외 distribution 생성
+    없으면 기존 Aruba breakfast 데이터(meal_time만)를 사용한다.
+
+    표본이 없거나 KDE를 계산할 수 없는 distribution은 빼고 skipped에 이유를 남긴다.
+    빈 density를 보내면 Context Engine이 payload 전체를 거부하기 때문이다.
+
+    반환값 중 sample_days / distributions / predictability가 payload에 들어간다.
+    meta / skipped는 검증·보고용이며 MQTT로 나가지 않는다.
     """
 
     if samples is None:
         samples = load_aruba_samples()
 
-    meal_samples = kde_samples.group(
-        samples
-    ).get("meal_time", [])
+    groups = kde_samples.group(samples)
 
-    times = kde_samples.values(meal_samples)
+    distributions = {}
+    predictability = {}
+    meta = {}
+    skipped = {}
+    used: list[KdeSample] = []
 
-    kde = fit_kde(times)
+    for name in kde_samples.DISTRIBUTION_KIND:
+        items = groups.get(name, [])
 
-    density = build_density(kde)
+        if not items:
+            skipped[name] = "표본 없음"
+            continue
 
-    predictability = (
-        calculate_predictability(density)
-    )
+        try:
+            grid, density = fit_distribution(
+                name,
+                kde_samples.values(items),
+                hydration_max_min,
+            )
+        except InsufficientSamples as exc:
+            skipped[name] = str(exc)
+            continue
+
+        distributions[name] = {
+            **grid.to_payload(),
+            "density": density,
+        }
+        predictability[name] = calculate_predictability(density)
+        meta[name] = {
+            "samples": len(items),
+            "sample_days": kde_samples.sample_days(items),
+            "sources": sorted({s.source for s in items}),
+            "proxy": any(s.proxy for s in items),
+        }
+        used += items
+
+    for name, reason in skipped.items():
+        log.info("%s 제외 — %s", name, reason)
+
+    if not distributions:
+        raise InsufficientSamples(
+            f"학습 가능한 distribution이 없습니다: {skipped}"
+        )
 
     return {
-        "sample_days": kde_samples.sample_days(
-            meal_samples
-        ),
-        "distributions": {
-            "meal_time": {
-                "grid_min": GRID_MIN,
-                "grid_step": GRID_STEP,
-                "density": density,
-            }
-        },
-        "predictability": {
-            "meal_time": predictability,
-        },
+        "sample_days": kde_samples.sample_days(used),
+        "distributions": distributions,
+        "predictability": predictability,
+        "meta": meta,
+        "skipped": skipped,
     }
+
+
+def _cli_samples(args) -> list[KdeSample] | None:
+    """
+    CLI 입력 조합. 아무 옵션도 없으면 None(기존 Aruba breakfast)이다.
+    --aruba-raw / --synthetic-hydration 은 개발·검증용이다.
+    """
+
+    collected: list[KdeSample] = []
+
+    if args.t0_jsonl:
+        collected += t0_to_kde_samples(load_t0_jsonl(args.t0_jsonl))
+
+    if args.aruba_raw:
+        from aruba import extract_samples
+
+        for series in extract_samples(args.aruba_raw).values():
+            collected += series
+
+    if args.synthetic_hydration:
+        from synthetic import generate_hydration_lag
+
+        collected += generate_hydration_lag(
+            sample_days=args.synthetic_days,
+            mean_min=args.synthetic_mean,
+            std_min=args.synthetic_std,
+            seed=args.synthetic_seed,
+            max_min=HYDRATION_GRID_MAX_MIN,
+        )
+
+    return collected or None
 
 
 if __name__ == "__main__":
@@ -427,18 +643,28 @@ if __name__ == "__main__":
     parser.add_argument(
         "--t0-jsonl",
         type=Path,
-        help="Context Engine t0 JSONL 경로 (없으면 Aruba CSV 사용)",
+        help="Context Engine t0 JSONL 경로",
     )
+    parser.add_argument(
+        "--aruba-raw",
+        type=Path,
+        help="Aruba 원본(aruba.txt) — meal_time / sleep_time·wake_time(proxy)",
+    )
+    parser.add_argument(
+        "--synthetic-hydration",
+        action="store_true",
+        help="검증용 synthetic hydration_lag 추가",
+    )
+    parser.add_argument("--synthetic-days", type=int, default=60)
+    parser.add_argument("--synthetic-mean", type=float, default=15)
+    parser.add_argument("--synthetic-std", type=float, default=5)
+    parser.add_argument("--synthetic-seed", type=int, default=42)
 
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
 
-    model = build_model(
-        t0_to_kde_samples(load_t0_jsonl(args.t0_jsonl))
-        if args.t0_jsonl
-        else None
-    )
+    model = build_model(_cli_samples(args))
 
     print(
         json.dumps(
@@ -447,4 +673,3 @@ if __name__ == "__main__":
             ensure_ascii=False,
         )
     )
-    

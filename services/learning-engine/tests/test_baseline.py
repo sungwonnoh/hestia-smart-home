@@ -219,7 +219,11 @@ def test_build_model_does_not_depend_on_source():
         KdeSample(k.distribution, k.value, k.date, source="aruba")
         for k in from_t0
     ]
-    assert build_model(from_t0) == build_model(relabeled)
+    a, b = build_model(from_t0), build_model(relabeled)
+    for key in ("sample_days", "distributions", "predictability"):     # payload 에 들어가는 부분
+        assert a[key] == b[key]
+    assert a["meta"]["meal_time"]["sources"] == ["sensor"]
+    assert b["meta"]["meal_time"]["sources"] == ["aruba"]
 
 
 def test_build_model_without_enough_meal_samples_fails():
@@ -245,13 +249,14 @@ def test_aruba_minutes_are_unchanged():
 
 
 def test_aruba_model_regression():
-    """기존(Phase 1 이전) build_model 결과와 같아야 한다."""
+    """기존(Phase 1 이전) 직선 KDE 결과와 같아야 한다.
+       아침 표본은 자정에서 멀어 circular 보정(v2 Phase 6)의 영향이 1e-30 수준이다."""
     rows = ARUBA.read_text(encoding="utf-8").splitlines()[1:]
     legacy = build_density(fit_kde(np.array([time_to_minutes(r.split(",")[1]) for r in rows])))
 
     model = build_model(load_aruba_samples(ARUBA))
     assert model["sample_days"] == 212
-    assert model["distributions"]["meal_time"]["density"] == legacy
+    assert model["distributions"]["meal_time"]["density"] == pytest.approx(legacy, abs=1e-15)
 
 
 # ============================================================ Context Engine 계약
