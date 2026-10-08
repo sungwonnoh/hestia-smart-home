@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from samples import KdeSample
+
 
 log = logging.getLogger(__name__)
 
@@ -101,32 +103,42 @@ class SleepEpisode:
         ).date().isoformat()
 
 
-@dataclass(frozen=True)
-class ArubaSample:
+def clock_minutes(ts: datetime) -> float:
+    """Aruba 로컬 시각 → 자정 기준 분"""
+
+    return (
+        ts.hour * 60
+        + ts.minute
+        + ts.second / 60
+        + ts.microsecond / 60_000_000
+    )
+
+
+def time_sample(
+    distribution: str,
+    date: str,
+    ts: datetime,
+    proxy: bool,
+) -> KdeSample:
     """
-    distribution 하나에 들어갈 시각 표본.
+    Aruba 시각 표본 → 공통 KdeSample
 
     date
       - meal_time : 식사 준비를 시작한 날
       - sleep_time: 그 밤이 시작된 날 (00:30 취침이면 전날)
       - wake_time : 깬 날
+
+    Aruba 에는 HESTIA 개입이 없었으므로 prompted 는 항상 False 다.
     """
 
-    distribution: str
-    date: str
-    at: datetime
-    proxy: bool
-
-    @property
-    def minutes(self) -> float:
-        """자정 기준 분"""
-
-        return (
-            self.at.hour * 60
-            + self.at.minute
-            + self.at.second / 60
-            + self.at.microsecond / 60_000_000
-        )
+    return KdeSample(
+        distribution=distribution,
+        value=clock_minutes(ts),
+        date=date,
+        source="aruba",
+        prompted=False,
+        proxy=proxy,
+    )
 
 
 @dataclass(frozen=True)
@@ -155,16 +167,16 @@ class SleepExtraction:
         return episode.segments[-1].end.line_no == self.last_line_no
 
     @property
-    def sleep_time(self) -> list[ArubaSample]:
+    def sleep_time(self) -> list[KdeSample]:
         return [
-            ArubaSample("sleep_time", e.night(), e.begin, proxy=True)
+            time_sample("sleep_time", e.night(), e.begin, proxy=True)
             for e in self.main
         ]
 
     @property
-    def wake_time(self) -> list[ArubaSample]:
+    def wake_time(self) -> list[KdeSample]:
         return [
-            ArubaSample("wake_time", e.end.date().isoformat(), e.end, proxy=True)
+            time_sample("wake_time", e.end.date().isoformat(), e.end, proxy=True)
             for e in self.main
             if not self.truncated(e)
         ]
@@ -404,7 +416,7 @@ def extract_sleep(
 # ==================================================================== 식사
 
 
-def extract_meal(aruba_log: ArubaLog) -> list[ArubaSample]:
+def extract_meal(aruba_log: ArubaLog) -> list[KdeSample]:
     """
     Meal_Preparation begin 전부.
     scripts/datasets/parse_aruba.py 의 meal_preparation.csv 와 같은 집합이다.
@@ -412,7 +424,7 @@ def extract_meal(aruba_log: ArubaLog) -> list[ArubaSample]:
     """
 
     return [
-        ArubaSample("meal_time", e.ts.date().isoformat(), e.ts, proxy=False)
+        time_sample("meal_time", e.ts.date().isoformat(), e.ts, proxy=False)
         for e in aruba_log.events
         if e.label == MEAL_LABEL and e.kind == "begin"
     ]
@@ -422,7 +434,7 @@ def extract_samples(
     path: Path = RAW_PATH,
     merge_gap_min: float = MERGE_GAP_MIN,
     anchor_hour: int = NIGHT_ANCHOR_HOUR,
-) -> dict[str, list[ArubaSample]]:
+) -> dict[str, list[KdeSample]]:
     """
     Aruba 원본 하나 → meal_time / sleep_time / wake_time 표본
     """
@@ -444,13 +456,13 @@ def extract_samples(
 # ==================================================================== 보고
 
 
-def _summary(samples: list[ArubaSample]) -> str:
+def _summary(samples: list[KdeSample]) -> str:
     """
     표본 수와 시간대별 개수.
     sleep_time 은 자정을 넘나들어 선형 min/median 이 의미 없으므로 시간대로 보인다.
     """
 
-    hours = Counter(s.at.hour for s in samples)
+    hours = Counter(int(s.value // 60) for s in samples)
 
     return f"{len(samples):>5}  " + " ".join(
         f"{h:02d}h:{n}" for h, n in sorted(hours.items())

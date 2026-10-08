@@ -11,16 +11,16 @@ from baseline import (
     T0Sample,
     build_density,
     build_model,
-    build_training_input,
     fit_kde,
-    group_by_distribution,
     load_aruba_samples,
     load_t0_jsonl,
     parse_t0_line,
-    sample_values,
+    t0_to_kde_sample,
+    t0_to_kde_samples,
     t0_to_minutes,
     time_to_minutes,
 )
+from samples import KdeSample, build_training_input, values
 
 
 REPO = Path(__file__).resolve().parents[3]
@@ -130,41 +130,45 @@ def test_non_object_line_is_rejected():
         parse_t0_line(json.dumps([MEAL]))
 
 
-# ============================================================ type 분리
+# ============================================================ t0 adapter
 
 
 def test_type_maps_to_distribution():
-    groups = group_by_distribution([
+    converted = t0_to_kde_samples([
         sample(type="wake"),
         sample(type="meal"),
         sample(type="hydration"),
     ])
-    assert set(groups) == {"wake_time", "meal_time", "hydration_lag"}
+    assert [k.distribution for k in converted] == ["wake_time", "meal_time", "hydration_lag"]
 
 
 def test_sleep_t0_is_not_mapped():
     """현재 t0 명세에 sleep type 이 없다. 합의 전에는 학습에 넣지 않는다."""
-    groups = group_by_distribution([sample(type="sleep"), sample(type="meal")])
-    assert list(groups) == ["meal_time"]
+    assert t0_to_kde_sample(sample(type="sleep")) is None
+    assert [k.distribution for k in t0_to_kde_samples([sample(type="sleep"), sample()])] == ["meal_time"]
 
 
-def test_unknown_type_is_excluded_from_kde():
+def test_unknown_type_is_excluded_from_kde(caplog):
     """복약 등 KDE 대상이 아닌 type 은 파싱은 되지만 분포에는 들어가지 않는다."""
-    groups = group_by_distribution([sample(type="medication"), sample(type="meal")])
-    assert list(groups) == ["meal_time"]
-    assert len(groups["meal_time"]) == 1
+    with caplog.at_level(logging.INFO):
+        converted = t0_to_kde_samples([sample(type="medication"), sample(type="meal")])
+    assert [k.distribution for k in converted] == ["meal_time"]
+    assert "medication" in caplog.text
 
 
-def test_prompted_sample_is_kept():
-    """Phase 1 은 보존만 한다. 감쇠(Phase 10)도 삭제는 하지 않는다."""
-    groups = group_by_distribution([sample(prompted=True), sample(prompted=False)])
-    assert [s.prompted for s in groups["meal_time"]] == [True, False]
+def test_prompted_and_source_are_kept():
+    """보존만 한다. 감쇠(Phase 11)도 삭제는 하지 않는다."""
+    converted = t0_to_kde_samples([sample(prompted=True, source="diary"), sample()])
+    assert [(k.prompted, k.source) for k in converted] == [(True, "diary"), (False, "sensor")]
+    assert not any(k.proxy for k in converted)
 
 
-def test_source_and_duration_are_kept():
-    groups = group_by_distribution([sample(source="diary", duration_sec=42.0)])
-    s = groups["meal_time"][0]
-    assert (s.source, s.duration_sec) == ("diary", 42.0)
+def test_unconvertible_t0_is_skipped(caplog):
+    """parse 는 통과했지만 시각으로 바꿀 수 없는 t0 — 학습 전체가 멈추면 안 된다."""
+    with caplog.at_level(logging.WARNING):
+        converted = t0_to_kde_samples([sample(t0=1e20), sample()])
+    assert len(converted) == 1
+    assert "변환 실패" in caplog.text
 
 
 # ============================================================ KDE 입력값
@@ -176,14 +180,14 @@ def test_t0_is_converted_to_kst_minutes():
 
 
 def test_hydration_lag_uses_duration_not_t0():
-    values = sample_values("hydration_lag", [parse_t0_line(json.dumps(HYDRATION))])
-    assert values.tolist() == [11.0]       # 660초 = 기상 후 11분
+    k = t0_to_kde_sample(parse_t0_line(json.dumps(HYDRATION)))
+    assert (k.distribution, k.value) == ("hydration_lag", 11.0)    # 660초 = 기상 후 11분
 
 
 def test_build_training_input_from_jsonl_only(tmp_path):
-    """완료 조건: t0 JSONL 만으로 KDE 학습 입력을 만들 수 있다."""
+    """Gate D: t0 JSONL 만으로 KDE 학습 입력을 만들 수 있다."""
     path = write_jsonl(tmp_path / "t0.jsonl", [MEAL, WAKE, HYDRATION])
-    inputs = build_training_input(load_t0_jsonl(path))
+    inputs = build_training_input(t0_to_kde_samples(load_t0_jsonl(path)))
     assert {k: v.tolist() for k, v in inputs.items()} == {
         "meal_time": [560.0],
         "wake_time": [540.0],
@@ -191,12 +195,15 @@ def test_build_training_input_from_jsonl_only(tmp_path):
     }
 
 
-def test_build_model_from_t0_samples():
-    days = [
+def t0_meal_days():
+    return [
         sample(date=f"2026-09-{d:02d}", t0=MEAL["t0"] + (d - 25) * 86400 + (d % 3) * 600)
         for d in range(1, 29)
     ]
-    model = build_model(days + [sample(type="wake")])
+
+
+def test_build_model_from_t0_samples():
+    model = build_model(t0_to_kde_samples(t0_meal_days() + [sample(type="wake")]))
     meal = model["distributions"]["meal_time"]
     assert model["sample_days"] == 28
     assert len(meal["density"]) == 96
@@ -205,28 +212,36 @@ def test_build_model_from_t0_samples():
     assert int(np.argmax(meal["density"])) in range(36, 39)
 
 
+def test_build_model_does_not_depend_on_source():
+    """같은 값이면 출처(t0 / aruba / synthetic)가 달라도 같은 모델이다."""
+    from_t0 = t0_to_kde_samples(t0_meal_days())
+    relabeled = [
+        KdeSample(k.distribution, k.value, k.date, source="aruba")
+        for k in from_t0
+    ]
+    assert build_model(from_t0) == build_model(relabeled)
+
+
 def test_build_model_without_enough_meal_samples_fails():
     with pytest.raises(ValueError):
-        build_model([sample(type="wake"), sample()])
+        build_model(t0_to_kde_samples([sample(type="wake"), sample()]))
 
 
 # ============================================================ Aruba 호환
 
 
-def test_aruba_goes_through_same_pipeline():
+def test_aruba_csv_becomes_common_samples():
     samples = load_aruba_samples(ARUBA)
     assert len(samples) == 212
-    assert {s.type for s in samples} == {"meal"}
+    assert {s.distribution for s in samples} == {"meal_time"}
     assert {s.source for s in samples} == {"aruba"}
     assert not any(s.prompted for s in samples)
 
 
 def test_aruba_minutes_are_unchanged():
-    """CSV 시각 → KST epoch → 자정 기준 분 왕복이 원래 시각과 같아야 한다."""
     rows = ARUBA.read_text(encoding="utf-8").splitlines()[1:]
     expected = [time_to_minutes(r.split(",")[1]) for r in rows]
-    actual = sample_values("meal_time", load_aruba_samples(ARUBA)).tolist()
-    assert actual == pytest.approx(expected, abs=1e-6)
+    assert values(load_aruba_samples(ARUBA)).tolist() == expected
 
 
 def test_aruba_model_regression():
@@ -236,7 +251,7 @@ def test_aruba_model_regression():
 
     model = build_model(load_aruba_samples(ARUBA))
     assert model["sample_days"] == 212
-    assert model["distributions"]["meal_time"]["density"] == pytest.approx(legacy, abs=1e-12)
+    assert model["distributions"]["meal_time"]["density"] == legacy
 
 
 # ============================================================ Context Engine 계약
@@ -263,6 +278,6 @@ def test_context_engine_t0_log_is_readable(tmp_path):
     samples = load_t0_jsonl(path)
     assert [asdict(s) for s in samples] == [asdict(e) for e in memory_log.entries]
 
-    inputs = build_training_input(samples)
+    inputs = build_training_input(t0_to_kde_samples(samples))
     assert "wake_time" in inputs
     assert T0Entry.__dataclass_fields__.keys() == T0Sample.__dataclass_fields__.keys()
