@@ -484,18 +484,10 @@ def fit_distribution(
     return grid, density
 
 
-def calculate_predictability(
+def calculate_entropy(
     density: list[float],
 ) -> float:
-    """
-    정규화된 density 배열의 entropy를 이용해
-    predictability를 계산한다.
-
-    H_max는 그 격자의 칸 수 기준이다 (시각 분포 96칸, hydration 24칸).
-
-    1에 가까울수록 규칙적,
-    0에 가까울수록 불규칙.
-    """
+    """정규화된 density 배열의 Shannon entropy (nats)"""
 
     probability = np.array(density)
 
@@ -503,9 +495,28 @@ def calculate_predictability(
         probability > 0
     ]
 
-    entropy = -np.sum(
-        probability * np.log(probability)
+    return float(
+        -np.sum(probability * np.log(probability))
     )
+
+
+def calculate_predictability(
+    density: list[float],
+) -> float:
+    """
+    정규화된 density 배열의 entropy를 이용해
+    predictability를 계산한다.
+
+        predictability = 1 - H / H_max
+
+    H_max는 그 격자의 칸 수 기준이다 (시각 분포 96칸, hydration 24칸).
+    칸 수가 다르면 H_max가 달라 distribution 간 값을 직접 비교할 수 없다.
+
+    1에 가까울수록 규칙적,
+    0에 가까울수록 불규칙.
+    """
+
+    entropy = calculate_entropy(density)
 
     max_entropy = np.log(len(density))
 
