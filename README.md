@@ -80,13 +80,16 @@ hestia-smart-home/
 
 ## Learning Engine
 
-현재 Learning Engine에서는 아침 준비 시각을 이용해 Gaussian KDE 기반 개인 Baseline을 생성합니다.
+Learning Engine은 기상·취침·식사 시각과 기상 후 수분 섭취 간격으로 Gaussian KDE 기반 개인 Baseline을 생성합니다.
 
 예:
 
 ```bash
-python3 services/learning-engine/baseline.py --time 09:40
+python3 services/learning-engine/baseline.py
+python3 services/learning-engine/debug_kde_query.py --time 09:40
 ```
+
+실행 옵션과 검증 결과는 [`services/learning-engine/README.md`](services/learning-engine/README.md)를 참고하세요.
 
 상세 설명은 [`docs/learning-engine.md`](docs/learning-engine.md)를 참고하세요.
 
