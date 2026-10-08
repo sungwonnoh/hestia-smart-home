@@ -16,6 +16,7 @@ import samples as kde_samples
 import weighting
 from samples import KdeSample
 from weighting import ColdStart, SampleWeighting
+from sleep_sessions import SLEEP_EVENT_TYPES, samples_from_events
 
 
 log = logging.getLogger(__name__)
@@ -203,12 +204,18 @@ def parse_t0_record(obj) -> T0Sample:
 
     Context Engine FileT0Log 한 줄과 hestia/log/t0 MQTT payload를 모두 받는다.
     MQTT 봉투 필드(version / sent_ts / src_id 등)는 KDE 입력이 아니므로 무시한다.
+
+    sleep_start / sleep_end 는 duration_sec 이 없거나 null 이어도 된다 (0 으로 본다).
+    수면 길이는 짝지은 sleep_end - sleep_start 로 계산하므로 이 값을 쓰지 않는다.
     """
 
     if not isinstance(obj, dict):
         raise ValueError(
             "JSON object가 아닙니다."
         )
+
+    if obj.get("type") in SLEEP_EVENT_TYPES and obj.get("duration_sec") is None:
+        obj = {**obj, "duration_sec": 0.0}
 
     missing = [
         key
@@ -255,16 +262,18 @@ def parse_t0_record(obj) -> T0Sample:
     )
 
 
-def load_t0_jsonl(path: Path) -> list[T0Sample]:
+def load_t0_records(path: Path) -> list[dict]:
     """
     Context Engine Replay / FileT0Log가 생성한
-    t0 JSONL을 한 줄씩 읽는다.
+    t0 JSONL을 한 줄씩 읽어 검증을 통과한 레코드(dict)를 돌려준다.
+
+    dict 그대로 두는 이유: sleep_start 의 area 처럼 T0Sample 에 없는 필드가 있다.
 
     잘못된 줄은 경고만 남기고 건너뛴다.
     로그 한 줄이 깨졌다고 전체 학습이 멈추면 안 된다.
     """
 
-    samples = []
+    records = []
 
     with open(path, "r", encoding="utf-8") as f:
         for line_no, line in enumerate(f, start=1):
@@ -274,18 +283,24 @@ def load_t0_jsonl(path: Path) -> list[T0Sample]:
                 continue
 
             try:
-                samples.append(
-                    parse_t0_line(line)
-                )
+                obj = json.loads(line)
+                parse_t0_record(obj)
+            except json.JSONDecodeError as exc:
+                log.warning("t0 JSONL %s:%d 건너뜀 — 잘못된 JSON: %s", path, line_no, exc)
+                continue
             except ValueError as exc:
-                log.warning(
-                    "t0 JSONL %s:%d 건너뜀 — %s",
-                    path,
-                    line_no,
-                    exc,
-                )
+                log.warning("t0 JSONL %s:%d 건너뜀 — %s", path, line_no, exc)
+                continue
 
-    return samples
+            records.append(obj)
+
+    return records
+
+
+def load_t0_jsonl(path: Path) -> list[T0Sample]:
+    """t0 JSONL → T0Sample 목록 (잘못된 줄은 건너뜀)"""
+
+    return [parse_t0_record(r) for r in load_t0_records(path)]
 
 
 def load_aruba_samples(
@@ -361,6 +376,8 @@ def t0_to_kde_samples(samples: list[T0Sample]) -> list[KdeSample]:
     t0 레코드 목록 → KdeSample 목록
 
     알 수 없는 type(예: medication, 명세에 없는 sleep)은 KDE 대상이 아니므로 제외한다.
+    sleep_start / sleep_end 는 짝지어야 하는 이벤트라 여기서 다루지 않는다
+    (t0_records_to_kde_samples 가 sleep_sessions 로 따로 처리).
     변환할 수 없는 값(예: 범위를 벗어난 t0)은 경고 후 건너뛴다.
     """
 
@@ -368,6 +385,9 @@ def t0_to_kde_samples(samples: list[T0Sample]) -> list[KdeSample]:
     unknown: set[str] = set()
 
     for sample in samples:
+        if sample.type in SLEEP_EVENT_TYPES:
+            continue
+
         try:
             converted = t0_to_kde_sample(sample)
         except (ValueError, OverflowError, OSError) as exc:
@@ -387,6 +407,36 @@ def t0_to_kde_samples(samples: list[T0Sample]) -> list[KdeSample]:
         )
 
     return out
+
+
+def t0_records_to_kde_samples(records: list[dict]) -> list[KdeSample]:
+    """
+    t0 로그 전체 → KdeSample.
+
+        meal / hydration          t0 adapter (t0_to_kde_samples)
+        sleep_start / sleep_end   짝지어 수면 → 밤잠 / 낮잠 구분 → 밤잠만 sleep_time / wake_time
+
+    wake_time 은 한 곳에서만 얻는다 (같은 기상을 두 번 학습하지 않도록).
+      - 기상이 관측된 밤잠이 있으면 그 sleep_end 를 쓰고 wake 레코드는 쓰지 않는다
+        (낮잠에서 깬 것은 제외되고, Context Engine wake 의 기상 인정 시간대 제한도 받지 않는다)
+      - 없으면 wake 레코드를 쓴다 (이전과 같음)
+    """
+
+    samples = t0_to_kde_samples([parse_t0_record(r) for r in records])
+    sleep_events = [r for r in records if r.get("type") in SLEEP_EVENT_TYPES]
+
+    if not sleep_events:
+        return samples
+
+    series, _ = samples_from_events(sleep_events)
+
+    if series["wake_time"]:
+        dropped = sum(s.distribution == "wake_time" for s in samples)
+        samples = [s for s in samples if s.distribution != "wake_time"]
+        if dropped:
+            log.info("wake_time 은 밤잠의 sleep_end 로 학습 — wake 레코드 %d건 미사용", dropped)
+
+    return samples + series["sleep_time"] + series["wake_time"]
 
 
 def load_times() -> np.ndarray:
@@ -675,17 +725,12 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--t0-jsonl",
         type=Path,
-        help="Context Engine t0 JSONL 경로",
+        help="Context Engine t0 JSONL 경로 (meal / wake / hydration / sleep_start / sleep_end)",
     )
     parser.add_argument(
         "--aruba-raw",
         type=Path,
         help="Aruba 원본(aruba.txt) — meal_time / sleep_time·wake_time(proxy)",
-    )
-    parser.add_argument(
-        "--sleep-jsonl",
-        type=Path,
-        help="내부 sleep / wake 레코드 JSONL — 밤잠만 골라 sleep_time / wake_time 학습",
     )
     parser.add_argument(
         "--synthetic-hydration",
@@ -707,7 +752,7 @@ def samples_from_args(args) -> list[KdeSample] | None:
     collected: list[KdeSample] = []
 
     if args.t0_jsonl:
-        collected += t0_to_kde_samples(load_t0_jsonl(args.t0_jsonl))
+        collected += t0_records_to_kde_samples(load_t0_records(args.t0_jsonl))
 
     if args.aruba_raw:
         from aruba import extract_samples
@@ -715,11 +760,6 @@ def samples_from_args(args) -> list[KdeSample] | None:
         for series in extract_samples(args.aruba_raw).values():
             collected += series
 
-    if args.sleep_jsonl:
-        from sleep_sessions import load_records, samples_from_records
-
-        series, _ = samples_from_records(load_records(args.sleep_jsonl))
-        collected += series["sleep_time"] + series["wake_time"]
 
     if args.synthetic_hydration:
         from synthetic import generate_hydration_lag

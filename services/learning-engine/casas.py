@@ -42,7 +42,7 @@ from sleep_sessions import (
     SleepSession,
     classify_sessions,
     drop_implausible,
-    session_records,
+    session_events,
     write_records,
 )
 
@@ -249,16 +249,16 @@ def report(raw_dir: Path = RAW_DIR) -> None:
 
 def export_jsonl(out_dir: Path, raw_dir: Path = RAW_DIR) -> list[Path]:
     """
-    거주자별 내부 sleep / wake 레코드 JSONL (SLEEP.md 형식).
-    baseline.py --sleep-jsonl 로 다시 읽으면 밤잠 / 낮잠을 다시 구분해 학습한다.
+    거주자별 sleep_start / sleep_end 이벤트 JSONL — Context Engine t0 로그와 같은 형식.
+    baseline.py --t0-jsonl 로 다시 읽으면 밤잠 / 낮잠을 다시 구분해 학습한다.
     """
 
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
 
     for spec, sleep in extract_all(raw_dir):
-        path = out_dir / f"{spec.dataset}_{spec.person}_sleep.jsonl"
-        write_records(session_records(sleep.classified, spec.dataset), path)
+        path = out_dir / f"{spec.dataset}_{spec.person}_t0.jsonl"
+        write_records(session_events(sleep.classified, spec.dataset), path)
         written.append(path)
 
     return written
@@ -267,7 +267,7 @@ def export_jsonl(out_dir: Path, raw_dir: Path = RAW_DIR) -> list[Path]:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CASAS 데이터셋별 sleep / wake proxy")
     parser.add_argument("raw_dir", nargs="?", type=Path, default=RAW_DIR)
-    parser.add_argument("--export-jsonl", type=Path, help="거주자별 sleep / wake JSONL 저장 디렉터리")
+    parser.add_argument("--export-jsonl", type=Path, help="거주자별 sleep_start / sleep_end t0 JSONL 저장 디렉터리")
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING)
 
