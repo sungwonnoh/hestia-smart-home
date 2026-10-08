@@ -13,7 +13,9 @@ import numpy as np
 from scipy.stats import gaussian_kde
 
 import samples as kde_samples
+import weighting
 from samples import KdeSample
+from weighting import ColdStart, SampleWeighting
 
 
 log = logging.getLogger(__name__)
@@ -398,7 +400,15 @@ def load_times() -> np.ndarray:
     )
 
 
-def fit_kde(times: np.ndarray):
+def fit_kde(
+    times: np.ndarray,
+    weights: np.ndarray | None = None,
+):
+    """
+    weights 가 없으면 기존 무가중치 KDE 다.
+    weights 가 있으면 bandwidth 도 유효 표본 수 기준으로 계산된다 (scipy).
+    """
+
     times = np.asarray(times, dtype=float)
 
     if len(times) < MIN_SAMPLES:
@@ -411,8 +421,17 @@ def fit_kde(times: np.ndarray):
             "KDE 입력에 NaN/inf가 있습니다."
         )
 
+    if weights is not None:
+        weights = np.asarray(weights, dtype=float)
+
+        if weights.shape != times.shape:
+            raise ValueError("weights 길이가 표본과 다릅니다.")
+
+        if not np.isfinite(weights).all() or (weights <= 0).any():
+            raise ValueError("weights는 양수 유한 값이어야 합니다.")
+
     try:
-        return gaussian_kde(times)
+        return gaussian_kde(times, weights=weights)
     except np.linalg.LinAlgError as exc:
         # 값이 전부 같으면 분산이 0이라 bandwidth를 정할 수 없다.
         raise InsufficientSamples(
@@ -463,6 +482,7 @@ def fit_distribution(
     distribution: str,
     values: np.ndarray,
     hydration_max_min: float = HYDRATION_GRID_MAX_MIN,
+    weights: np.ndarray | None = None,
 ) -> tuple[Grid, list[float]]:
     """
     distribution 하나의 공통 KDE fitting.
@@ -480,14 +500,15 @@ def fit_distribution(
     values = np.asarray(values, dtype=float)
 
     if not kde_samples.is_time_of_day(distribution):
-        return grid, build_density(fit_kde(values), grid)
+        return grid, build_density(fit_kde(values, weights), grid)
 
     # 펼치기 전에 개수·NaN 검증을 먼저 받는다.
     if len(values) < MIN_SAMPLES or not np.isfinite(values).all():
-        fit_kde(values)
+        fit_kde(values, weights)
 
+    # 펼쳐도 표본 순서는 그대로라 weights 를 그대로 쓴다.
     density = build_density(
-        fit_kde(unwrap_circular(values)),
+        fit_kde(unwrap_circular(values), weights),
         grid,
         period=PERIOD_MIN,
     )
@@ -545,6 +566,8 @@ def calculate_predictability(
 def build_model(
     samples: list[KdeSample] | None = None,
     hydration_max_min: float = HYDRATION_GRID_MAX_MIN,
+    sample_weighting: SampleWeighting | None = None,
+    cold_start: ColdStart | None = None,
 ) -> dict:
     """
     MQTT payload에 들어갈 KDE 모델 부분을 생성한다.
@@ -557,6 +580,11 @@ def build_model(
 
     반환값 중 sample_days / distributions / predictability가 payload에 들어간다.
     meta / skipped는 검증·보고용이며 MQTT로 나가지 않는다.
+
+    v2 Phase 11 (모두 기본 꺼짐):
+      sample_weighting  recent weighting / prompted attenuation
+      cold_start        prior와 섞기. prior가 없는 distribution은 개인 분포 그대로
+    predictability는 최종(섞은 뒤) density로 계산한다.
     """
 
     if samples is None:
@@ -577,27 +605,51 @@ def build_model(
             skipped[name] = "표본 없음"
             continue
 
+        weights = weighting.sample_weights(items, sample_weighting)
+
         try:
             grid, density = fit_distribution(
                 name,
                 kde_samples.values(items),
                 hydration_max_min,
+                weights,
             )
         except InsufficientSamples as exc:
             skipped[name] = str(exc)
             continue
+
+        days = kde_samples.sample_days(items)
+        info = {
+            "samples": len(items),
+            "sample_days": days,
+            "sources": sorted({s.source for s in items}),
+            "proxy": any(s.proxy for s in items),
+            "prompted": sum(s.prompted for s in items),
+        }
+
+        if weights is not None:
+            info["weighting"] = {
+                "recent_lambda": sample_weighting.recent_lambda,
+                "prompted_weight": sample_weighting.prompted_weight,
+                "effective_samples": round(weighting.effective_samples(weights), 3),
+            }
+
+        if cold_start is not None:
+            prior = cold_start.priors.get(name)
+
+            if prior is None:
+                info["cold_start"] = {"alpha": 1.0, "prior": False}
+            else:
+                alpha = weighting.blend_alpha(days, cold_start.half_days)
+                density = weighting.blend(density, prior, alpha)
+                info["cold_start"] = {"alpha": round(alpha, 6), "prior": True}
 
         distributions[name] = {
             **grid.to_payload(),
             "density": density,
         }
         predictability[name] = calculate_predictability(density)
-        meta[name] = {
-            "samples": len(items),
-            "sample_days": kde_samples.sample_days(items),
-            "sources": sorted({s.source for s in items}),
-            "proxy": any(s.proxy for s in items),
-        }
+        meta[name] = info
         used += items
 
     for name, reason in skipped.items():
