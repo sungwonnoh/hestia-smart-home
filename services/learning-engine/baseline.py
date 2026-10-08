@@ -102,6 +102,37 @@ def grid_for(
     )
 
 
+# 시각 분포의 주기 (분). 23:50과 00:10은 20분 차이다.
+PERIOD_MIN = kde_samples.MINUTES_PER_DAY
+
+# circular density를 계산할 때 더하는 주기 범위.
+# 펼친 표본은 [0, 2880) 안에 있고, 앞뒤 한 바퀴씩 여유를 둔다.
+WRAP_SHIFTS = range(-2, 4)
+
+
+def unwrap_circular(
+    values: np.ndarray,
+    period: float = PERIOD_MIN,
+) -> np.ndarray:
+    """
+    원 위의 시각을 끊김 없는 직선 값으로 펼친다.
+
+    표본 사이 가장 큰 빈 구간을 자르는 곳으로 삼는다.
+    23:00 / 00:30 취침은 1380 / 1470 이 되어 90분 차이로 이어진다.
+    자정에서 자르면 bandwidth가 1440분짜리 분산으로 계산된다.
+    """
+
+    x = np.mod(np.asarray(values, dtype=float), period)
+    ordered = np.sort(x)
+
+    gaps = np.diff(
+        np.append(ordered, ordered[0] + period)
+    )
+    cut = ordered[(int(np.argmax(gaps)) + 1) % len(ordered)]
+
+    return np.where(x >= cut, x, x + period)
+
+
 class InsufficientSamples(ValueError):
     """이 distribution은 KDE를 계산할 수 없다. 모델에서 빼고 이유를 남긴다."""
 
@@ -381,15 +412,27 @@ def fit_kde(times: np.ndarray):
 def build_density(
     kde,
     grid: Grid = TIME_OF_DAY_GRID,
+    period: float | None = None,
 ) -> list[float]:
     """
     격자 각 칸 중앙에서 KDE density를 계산한다.
     기본은 하루를 15분 단위 96칸으로 나눈 격자다.
 
+    period를 주면 원(circular) 위의 density다.
+    각 칸에 한 바퀴씩 옮긴 위치의 density를 더해 자정에서 끊기지 않게 한다.
+
     최종 배열의 합은 1.0이 되도록 정규화한다.
     """
 
-    density = kde(grid.centers())
+    centers = grid.centers()
+
+    if period is None:
+        density = kde(centers)
+    else:
+        density = sum(
+            kde(centers + k * period)
+            for k in WRAP_SHIFTS
+        )
 
     density_sum = density.sum()
 
@@ -413,13 +456,29 @@ def fit_distribution(
     """
     distribution 하나의 공통 KDE fitting.
     출처와 무관하게 숫자 배열만 받는다.
+
+    - time_of_day (wake/sleep/meal): circular KDE. 1440분 주기.
+    - elapsed (hydration_lag): 직선 KDE. 경과 시간은 이어지지 않는다.
+
+    여기서 다루는 것은 fitting의 circularity뿐이다.
+    개입용 tail probability의 circular 정의는 Context Engine
+    model.tail_probability(wrap=...)의 미결 사항으로 남긴다.
     """
 
     grid = grid_for(distribution, hydration_max_min)
+    values = np.asarray(values, dtype=float)
+
+    if not kde_samples.is_time_of_day(distribution):
+        return grid, build_density(fit_kde(values), grid)
+
+    # 펼치기 전에 개수·NaN 검증을 먼저 받는다.
+    if len(values) < MIN_SAMPLES or not np.isfinite(values).all():
+        fit_kde(values)
 
     density = build_density(
-        fit_kde(values),
+        fit_kde(unwrap_circular(values)),
         grid,
+        period=PERIOD_MIN,
     )
 
     return grid, density
