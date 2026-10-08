@@ -219,7 +219,11 @@ def test_build_model_does_not_depend_on_source():
         KdeSample(k.distribution, k.value, k.date, source="aruba")
         for k in from_t0
     ]
-    assert build_model(from_t0) == build_model(relabeled)
+    a, b = build_model(from_t0), build_model(relabeled)
+    for key in ("sample_days", "distributions", "predictability"):     # payload 에 들어가는 부분
+        assert a[key] == b[key]
+    assert a["meta"]["meal_time"]["sources"] == ["sensor"]
+    assert b["meta"]["meal_time"]["sources"] == ["aruba"]
 
 
 def test_build_model_without_enough_meal_samples_fails():
