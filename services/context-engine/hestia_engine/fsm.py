@@ -48,6 +48,7 @@ class T0Entry:
     area: str | None = None
     method: str | None = None        # banner / dim / none
     confidence: float | None = None  # 0.9 / 0.9 / 0.6
+    awake_areas: tuple[str, ...] | None = None
 
 
 @runtime_checkable

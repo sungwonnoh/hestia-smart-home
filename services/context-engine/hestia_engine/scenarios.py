@@ -96,6 +96,7 @@ class ScenarioRunner:
         self._last_awake_at: float | None = None
         self._pending_restore: tuple[str, int] | None = None
         self._probe_base: dict[str, int] = {}
+        self._awake_areas: set[str] | None = None   # None = sleep_end 를 못 봤다
         self._seq = 0
 
         # 수분
@@ -140,6 +141,10 @@ class ScenarioRunner:
         # 내려둔 조명은 사용자가 끈 뒤에 조용히 되돌린다
         self._restore_if_off()
 
+                # 내려둔 조명은 사용자가 끈 뒤에 조용히 되돌린다
+        self._restore_if_off()
+        self._track_awake_areas(context)
+
         if self._probe is not None:
             return self._check_probe(context, now)
 
@@ -153,6 +158,7 @@ class ScenarioRunner:
                 ))
                 self._last_sleep_end_at = woke_at
                 self._notify_count = 0      # 깼으면 반복 카운터를 푼다
+                self._awake_areas = set()
                 self.asleep = None
                 self._notify_asleep(None)
             return []
@@ -390,6 +396,7 @@ class ScenarioRunner:
         self._log_sleep(
             "sleep_start", still_since,
             area=area, method=method, confidence=confidence,
+            awake_areas=self._take_awake_areas(area),
         )
         self.asleep = AsleepState(
             since=still_since, area=area, decision_id=decision_id,
@@ -408,6 +415,7 @@ class ScenarioRunner:
         self, type_: str, t0: float, *,
         area: str | None = None, method: str | None = None,
         confidence: float | None = None,
+        awake_areas: tuple[str, ...] | None = None,
     ) -> None:
         if self._t0log is None:
             return
@@ -415,6 +423,7 @@ class ScenarioRunner:
             date=day_key(t0), type=type_, t0=t0,
             source="sensor", prompted=False, duration_sec=0.0,
             area=area, method=method, confidence=confidence,
+            awake_areas=awake_areas,
         ))
 
     # 깸 판정
@@ -496,6 +505,25 @@ class ScenarioRunner:
             target, brightness=level,
             reason="SLEEP_ROUTINE", priority="low",
         )
+
+    def _track_awake_areas(self, context: Any) -> None:
+        """sleep_end 이후 들른 구역을 모은다."""
+        if self._awake_areas is None or self.asleep is not None:
+            return
+        presence = getattr(context, "presence", None)
+        if presence is not None and presence.user_area:
+            self._awake_areas.add(presence.user_area)
+
+    def _take_awake_areas(self, area: str | None) -> tuple[str, ...] | None:
+        """잠든 구역은 뺀다 — area 에 이미 있다.
+        None 은 '모른다' 다. 재시작으로 직전 sleep_end 를 못 본 경우이며,
+        빈 배열('나가지 않았다')과 구별해야 배치가 잘못 잇지 않는다.
+        """
+        if self._awake_areas is None:
+            return None
+        out = tuple(sorted(self._awake_areas - {area}))
+        self._awake_areas = None
+        return out
     
 
     # ------------------------------------------------------------ SAFETY
