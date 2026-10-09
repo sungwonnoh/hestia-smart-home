@@ -5,6 +5,7 @@ import pytest
 from hestia_engine.clock import ReplayClock
 from hestia_engine.config import load
 from hestia_engine.engine import Engine, RecordingPublisher
+from hestia_engine.fsm import MemoryT0Log
 from hestia_engine.messages import parse
 from hestia_engine.timers import Scheduler
 from hestia_engine.world import WorldState
@@ -13,6 +14,7 @@ from test_activity import HOME, POLICY, MORNING, NIGHT
 
 STILL_LIMIT = 900        # policy.toml 의 scenarios.sleep.still_sec
 PROBE_SEC = 60           # probe_timeout_sec
+SUSTAIN = 60             # end_sustain_sec — 줄이면 여기도
 
 
 class Ctx:
@@ -26,8 +28,10 @@ class Ctx:
         self.sched = Scheduler(self.clock)
         self.world = WorldState(self.clock, self.config, self.sched)
         self.pub = RecordingPublisher()
+        self.t0 = MemoryT0Log()
         self.engine = Engine(
-            self.clock, self.config, self.world, self.sched, self.pub
+            self.clock, self.config, self.world, self.sched, self.pub,
+            t0log=self.t0,
         )
 
     def at(self, ts: float):
@@ -93,6 +97,10 @@ class Ctx:
 
     def cmds(self) -> tuple[dict, ...]:
         return tuple(p for _, t, p in self.pub.published if t.endswith("/cmd"))
+
+    def sleeps(self, type_: str) -> tuple:
+        """sleep_start / sleep_end 로그."""
+        return self.t0.of_type(type_)
 
     @property
     def runner(self):
@@ -209,6 +217,17 @@ def test_dim_when_tv_off(c):
     assert c.cmds()[-1]["params"]["brightness"] == 70
 
 
+def test_dim_is_relative_to_base(c):
+    """비율이라 어두운 조명도 내려간다. 40 → 28.
+    야간등을 40으로 쓰는 집에 절대값 70을 쓰면 오히려 밝아진다."""
+    sofa_still(c)
+    c.light("vd-02", brightness=40, seq=2)
+    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
+
+    assert c.cmds()[-1]["params"]["brightness"] == 28
+    assert c.runner._probe is not None
+
+
 def test_dim_uses_transition(c):
     """한 번에 바뀌면 놀란다. 보간은 노드가 한다."""
     sofa_still(c)
@@ -216,16 +235,6 @@ def test_dim_uses_transition(c):
     c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
 
     assert c.cmds()[-1]["params"]["transition_ms"] == 30000
-
-
-def test_no_dim_when_already_dark(c):
-    """이미 그보다 어두우면 내릴 것이 없다."""
-    sofa_still(c)
-    c.light("vd-02", brightness=40, seq=2)
-    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
-
-    assert c.cmds() == ()
-    assert c.runner._probe is None
 
 
 def test_no_dim_when_light_off(c):
@@ -245,18 +254,31 @@ def test_awake_when_light_raised(c):
     assert c.reasons() == ["AWAKE"]
 
 
-def test_restore_after_waking(c):
-    """움직여서 깬 경우 원래 밝기로 돌린다.
 
-    사용자가 직접 올렸으면 그 값이 사용자의 선택이므로 건드리지 않는다.
-    """
+def test_no_restore_while_visible(c):
+    """깬 뒤에도 밝기는 그대로 둔다.
+    보는 앞에서 되돌리면 조명이 고장난 것처럼 읽힌다."""
     sofa_still(c)
     c.at(NIGHT + STILL_LIMIT + 10)
-    c.light("vd-02", brightness=70, seq=3)          # 명령이 반영됨
+    c.light("vd-02", brightness=70, seq=3)
+    before = len(c.cmds())
 
     c.at(NIGHT + STILL_LIMIT + 30).presence("vs-01", energy=50, seq=3)
 
     assert c.reasons() == ["AWAKE"]
+    assert len(c.cmds()) == before
+
+
+def test_restore_after_lights_off(c):
+    """사용자가 불을 끈 뒤에 되돌린다. 꺼져 있어 보이지 않는다."""
+    sofa_still(c)
+    c.at(NIGHT + STILL_LIMIT + 10)
+    c.light("vd-02", brightness=70, seq=3)
+    c.at(NIGHT + STILL_LIMIT + 30).presence("vs-01", energy=50, seq=3)
+
+    c.light("vd-02", power="OFF", brightness=0, seq=4)
+    c.engine.scenarios.tick(c.engine.context)
+
     assert c.cmds()[-1]["params"]["brightness"] == 100
 
 
@@ -285,30 +307,6 @@ def test_asleep_records_area(c):
     c.sched.run_due()
 
     assert c.runner.asleep.area == "living"
-
-
-def test_night_is_not_nap(c):
-    c.device("vd-01", "smart_tv", power="ON")
-    c.presence("vs-01", energy=3)
-    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
-    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
-    c.sched.run_due()
-
-    assert c.runner.asleep.nap is False
-
-
-def test_daytime_is_nap(tmp_path):
-    """낮잠에 조명을 끄면 깼을 때 불편하고, sleep_time 분포에 낮잠이
-    섞이면 '이 사람은 14시에 잔다' 가 학습된다."""
-    c = Ctx(tmp_path, start=MORNING)
-    c.device("vd-01", "smart_tv", power="ON")
-    c.presence("vs-01", energy=3)
-    c.at(MORNING + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
-    c.at(MORNING + STILL_LIMIT + 10 + PROBE_SEC + 5)
-    c.sched.run_due()
-
-    assert c.runner.asleep is not None
-    assert c.runner.asleep.nap is True
 
 
 def test_decision_payload_shape(c):
@@ -340,7 +338,7 @@ def test_no_reprobe_while_asleep(c):
 
 
 def test_waking_clears_asleep(c):
-    """움직이면 깬 것이다."""
+    """명확한 움직임이 지속되면 깬 것이다. 뒤척임 한 번은 아니다."""
     c.device("vd-01", "smart_tv", power="ON")
     c.presence("vs-01", energy=3)
     c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
@@ -349,6 +347,11 @@ def test_waking_clears_asleep(c):
     assert c.runner.asleep is not None
 
     c.at(NIGHT + STILL_LIMIT + 200).presence("vs-01", energy=50, seq=3)
+    assert c.runner.asleep is not None          # 아직 — 지속 확인 중
+
+    c.at(NIGHT + STILL_LIMIT + 200 + SUSTAIN + 5).presence(
+        "vs-01", energy=50, seq=4
+    )
     assert c.runner.asleep is None
 
 
@@ -397,3 +400,236 @@ def test_probe_sets_no_cooldown(c):
     c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
 
     assert "SLEEP_ROUTINE" not in c.engine.context.suppression.cooldowns
+
+
+# ============================================================ t0 로그
+
+
+def test_sleep_start_t0_is_still_since(c):
+    """t0 는 확정 시각이 아니라 정지가 시작된 시각이다.
+    확정 시각을 쓰면 프로브에 걸린 시간만큼 밀려 분포가 틀어진다."""
+    c.device("vd-01", "smart_tv", power="ON")
+    c.presence("vs-01", energy=3)
+    still_began = c.clock.now()
+
+    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+
+    entries = c.sleeps("sleep_start")
+    assert len(entries) == 1
+    assert entries[0].t0 == still_began
+
+
+def test_sleep_start_records_method(c):
+    """어떻게 확정했나. 배치가 가중치로 쓴다."""
+    c.device("vd-01", "smart_tv", power="ON")
+    c.presence("vs-01", energy=3)
+    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+
+    e = c.sleeps("sleep_start")[0]
+    assert e.method == "banner"
+    assert e.confidence == 0.9
+    assert e.area == "living"
+    assert e.duration_sec == 0.0
+
+
+def test_sleep_end_logged(c):
+    """쌍으로 남긴다. duration 은 배치가 뺀다."""
+    c.device("vd-01", "smart_tv", power="ON")
+    c.presence("vs-01", energy=3)
+    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+
+    woke = NIGHT + STILL_LIMIT + 200
+    c.at(woke).presence("vs-01", energy=50, seq=3)
+    c.at(woke + SUSTAIN + 5).presence("vs-01", energy=50, seq=4)
+
+    ends = c.sleeps("sleep_end")
+    assert len(ends) == 1
+    assert ends[0].t0 == woke
+
+
+# ============================================================ 조명 2단계
+
+
+def test_dim_second_step(c):
+    """1단계에 무응답이면 한 단계 더 내린다. 100 → 70 → 30."""
+    sofa_still(c)
+    c.at(NIGHT + STILL_LIMIT + 10)
+    assert c.cmds()[-1]["params"]["brightness"] == 70
+
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+
+    assert c.cmds()[-1]["params"]["brightness"] == 30
+    assert c.runner._probe is not None
+    assert c.runner.asleep is None
+
+
+def test_dim_second_step_is_from_base(c):
+    """2단계는 1단계 결과가 아니라 기준 밝기 대비다.
+    70 의 30% 인 21 이 아니라 100 의 30% 인 30."""
+    sofa_still(c)
+    c.at(NIGHT + STILL_LIMIT + 10)
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+
+    assert c.cmds()[-1]["params"]["brightness"] == 30
+
+
+def test_asleep_after_two_steps(c):
+    """2단계까지 무응답이면 확정한다."""
+    sofa_still(c)
+    c.at(NIGHT + STILL_LIMIT + 10)
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC * 2 + 10)
+    c.sched.run_due()
+
+    assert c.runner.asleep is not None
+    assert c.sleeps("sleep_start")[0].method == "dim"
+
+
+def test_no_second_step_when_moving(c):
+    """1단계에서 움직이면 더 내리지 않는다."""
+    sofa_still(c)
+    c.at(NIGHT + STILL_LIMIT + 10)
+    before = len(c.cmds())
+
+    c.at(NIGHT + STILL_LIMIT + 30).presence("vs-01", energy=50, seq=3)
+
+    assert c.reasons() == ["AWAKE"]
+    assert len(c.cmds()) == before
+
+
+def test_probe_base_does_not_ratchet(c):
+    """기준 밝기는 한 번만 읽는다. 매번 현재값을 읽으면
+    내린 결과가 다음 기준이 되어 밝기가 복리로 줄어든다."""
+    sofa_still(c)
+    c.at(NIGHT + STILL_LIMIT + 10)
+    c.light("vd-02", brightness=70, seq=3)
+    c.at(NIGHT + STILL_LIMIT + 30).presence("vs-01", energy=50, seq=3)
+    assert c.reasons() == ["AWAKE"]
+
+    gap = 2700
+    base = NIGHT + STILL_LIMIT + 30 + gap + 10
+    c.at(base).presence("vs-01", energy=3, seq=4)
+    c.at(base + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=5)
+
+    assert c.cmds()[-1]["params"]["brightness"] == 70   # 49 가 아니다
+
+
+# ============================================================ 떠볼 수단 없음
+
+
+def test_no_channel_waits_longer(c):
+    """TV 도 조명도 꺼져 있으면 떠볼 수가 없다. 긴 정지로만 확정한다."""
+    c.device("vd-01", "smart_tv", power="OFF")
+    c.light("vd-02", power="OFF", brightness=0)
+    c.presence("vs-01", energy=3)
+
+    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
+    assert c.runner.asleep is None              # 15분으로는 부족
+    assert c.cmds() == ()
+
+    c.at(NIGHT + 1800 + 10).presence("vs-01", energy=3, seq=3)
+    assert c.runner.asleep is not None
+
+
+def test_no_channel_confidence(c):
+    """떠보지 못했으니 덜 확실하다."""
+    c.device("vd-01", "smart_tv", power="OFF")
+    c.light("vd-02", power="OFF", brightness=0)
+    c.presence("vs-01", energy=3)
+    c.at(NIGHT + 1800 + 10).presence("vs-01", energy=3, seq=2)
+
+    e = c.sleeps("sleep_start")[0]
+    assert e.method == "none"
+    assert e.confidence == 0.6
+
+
+# ============================================================ 재프로브
+
+
+def test_gap_after_awake(c):
+    """깨어 있다고 답한 직후에는 다시 묻지 않는다."""
+    c.device("vd-01", "smart_tv", power="ON")
+    c.presence("vs-01", energy=3)
+    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
+
+    nid = c.pushes()[0]["notify_id"]
+    c.engine.notifier.on_ack(nid, "SEEN", "vd-10")
+    c.engine.scenarios.tick(c.engine.context)
+    before = len(c.pushes())
+
+    awake_at = c.clock.now()
+    c.at(awake_at + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=3)
+    assert len(c.pushes()) == before            # 45분이 아직 안 지났다
+
+    c.at(awake_at + 2700 + STILL_LIMIT + 10).presence(
+        "vs-01", energy=3, seq=4
+    )
+    assert len(c.pushes()) > before
+
+
+def test_resleep_emits_decision(c):
+    """화장실에 다녀와 다시 누우면 그것도 발행돼야 한다.
+    sleep_end 가 판정을 비우지 않으면 두 번째 확정이 묻힌다."""
+    c.device("vd-01", "smart_tv", power="ON")
+    c.presence("vs-01", energy=3)
+    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+    assert c.reasons().count("ASLEEP_CONFIRMED") == 1
+
+    woke = NIGHT + STILL_LIMIT + 200
+    c.at(woke).presence("vs-01", energy=50, seq=3)
+    c.at(woke + SUSTAIN + 5).presence("vs-01", energy=50, seq=4)
+    assert "WOKE" in c.reasons()
+
+    again = woke + SUSTAIN + 3600
+    c.at(again).presence("vs-01", energy=3, seq=5)
+    c.at(again + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=6)
+    c.at(again + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+
+    assert c.reasons().count("ASLEEP_CONFIRMED") == 2
+    assert len(c.sleeps("sleep_start")) == 2
+
+
+# ============================================================ 압력 패드
+
+
+def test_bed_false_ends_sleep_at_once(c):
+    """패드가 가장 확실하다. 지속을 기다리지 않는다."""
+    c.device("vd-01", "smart_tv", power="ON")
+    c.bed("vs-02", occupied=True)
+    c.presence("vs-01", energy=3)
+    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+    assert c.runner.asleep is not None
+
+    left = NIGHT + STILL_LIMIT + 300
+    c.at(left).bed("vs-02", occupied=False, seq=2)
+
+    assert c.runner.asleep is None
+    assert c.sleeps("sleep_end")[0].t0 == left
+
+
+def test_lights_off_on_confirm(c):
+    """확정하면 끈다."""
+    sofa_still(c)
+    c.at(NIGHT + STILL_LIMIT + 10)
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC * 2 + 10)
+    c.sched.run_due()
+
+    assert c.cmds()[-1]["params"]["power"] == "OFF"
+
+

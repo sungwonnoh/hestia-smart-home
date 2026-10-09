@@ -35,14 +35,19 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class T0Entry:
-    """활동 묶음 한 건. KDE 학습의 원재료다."""
+    """활동 묶음 한 건. KDE 학습의 원재료."""
 
     date: str              # YYYY-MM-DD (KST)
-    type: str              # meal / wake / hydration
+    type: str              # meal / wake / hydration / sleep_start / sleep_end
     t0: float              # 묶음 시작 시각 (epoch)
     source: str            # sensor / diary / aruba
     prompted: bool         # 시스템 유도로 일어난 행동인가
-    duration_sec: float
+    duration_sec: float = 0.0
+
+    # sleep_start 전용
+    area: str | None = None
+    method: str | None = None        # banner / dim / none
+    confidence: float | None = None  # 0.9 / 0.9 / 0.6
 
 
 @runtime_checkable
