@@ -113,13 +113,14 @@ def c(tmp_path):
 
 
 def sofa_still(c: Ctx, *, seq: int = 1):
-    """거실에 재실 + TV 꺼짐 → RESTING (0.30 + 0.15 > min_score 0.35).
+    """소파 패드 + 거실 재실 → IN_SOFA_AWAKE.
 
     TV 가 꺼져 있으므로 프로브는 조명으로 간다. 그래서 조명 state 도
     넣어둔다 — 없으면 프로브 자체가 안 나간다.
     """
     c.device("vd-01", "smart_tv", power="OFF")
     c.light("vd-02", brightness=100)
+    c.bed("vs-02", occupied=True)
     c.presence("vs-01", energy=3, seq=seq)
     return c
 
@@ -530,6 +531,7 @@ def test_no_channel_waits_longer(c):
     """TV 도 조명도 꺼져 있으면 떠볼 수가 없다. 긴 정지로만 확정한다."""
     c.device("vd-01", "smart_tv", power="OFF")
     c.light("vd-02", power="OFF", brightness=0)
+    c.bed("vs-02", occupied=True)
     c.presence("vs-01", energy=3)
 
     c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
@@ -544,6 +546,7 @@ def test_no_channel_confidence(c):
     """떠보지 못했으니 덜 확실하다."""
     c.device("vd-01", "smart_tv", power="OFF")
     c.light("vd-02", power="OFF", brightness=0)
+    c.bed("vs-02", occupied=True)
     c.presence("vs-01", energy=3)
     c.at(NIGHT + 1800 + 10).presence("vs-01", energy=3, seq=2)
 

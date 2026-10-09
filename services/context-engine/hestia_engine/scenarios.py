@@ -99,6 +99,7 @@ class ScenarioRunner:
 
     def tick(self, context: Any) -> list[tuple[str, float]]:
         """시나리오를 전부 훑는다. 조건에 안 맞으면 조용히 지나간다."""
+        self._context = context
         timers: list[tuple[str, float]] = []
         timers += self._wake_routine(context)
         timers += self._safety(context)
@@ -127,6 +128,7 @@ class ScenarioRunner:
                     factors={"area": self.asleep.area},
                 ))
                 self.asleep = None
+                self._notify_asleep(None)
             return []
 
         # AWAKE 로 답한 직후에는 다시 묻지 않는다
@@ -168,7 +170,7 @@ class ScenarioRunner:
         """자는지 확인할 만한 상태인가. 그렇다면 어느 구역인가."""
         states = tuple(self._sleep_value(
             "states",
-            ["RESTING", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"],
+            ["IN_SOFA_AWAKE", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"],
         ))
         activity = getattr(context, "activity", None)
         if activity is None or activity.state not in states:
@@ -366,12 +368,15 @@ class ScenarioRunner:
         self.asleep = AsleepState(
             since=still_since, area=area, decision_id=decision_id,
         )
+        self._notify_asleep(area)
+
         # 확정했으면 끈다. 되돌리기는 꺼진 뒤에 일어난다.
         if probe is not None and probe.target is not None:
             self._controller.set(
                 probe.target, power="OFF",
                 reason="SLEEP_ROUTINE", priority="low",
             )
+            
 
     def _log_sleep(
         self, type_: str, t0: float, *,
@@ -562,6 +567,11 @@ class ScenarioRunner:
 
     def _notify_value(self, scenario: str, key: str, default: Any) -> Any:
         return self._config.notify_policy(scenario).get(key, default)
+
+    def _notify_asleep(self, area: str | None) -> None:
+        ctx = getattr(self, "_context", None)
+        if ctx is not None:
+            ctx.note_asleep(area)
 
     def _next_id(self) -> str:
         self._seq += 1

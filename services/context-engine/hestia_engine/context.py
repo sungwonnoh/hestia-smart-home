@@ -809,6 +809,7 @@ class ContextEngine:
         self.activity: ActivityContext | None = None
         self.suppression: SuppressionContext | None = None
         self._day_prev: Any | None = None
+        self._asleep_area: str | None = None
 
 
     def recompute(self) -> tuple[Context, ...]:
@@ -835,7 +836,9 @@ class ContextEngine:
         self.occupancy = occupancy
 
         # activity 는 presence 와 away 를 읽는다. 순서상 마지막.
-        activity, t = self._activity_eval.evaluate(presence, away, self.activity)
+        activity, t = self._activity_eval.evaluate(
+            presence, away, self.activity, asleep_area=self._asleep_area
+        )
         timers += t
 
         # FSM 은 activity 를 읽기만 하고 t0 를 돌려준다 (단방향).
@@ -848,7 +851,7 @@ class ContextEngine:
             changed.append(self.day_fsm.state)
         self._day_prev = self.day_fsm.state
 
-        if self.meal_fsm.t0 is not None and activity.state in ("MEAL_PREP", "EATING", "KITCHEN_MISC"):
+        if self.meal_fsm.t0 is not None and activity.state in ("COOKING", "EATING", "KITCHEN_MISC"):
             activity = replace(activity, t0=self.meal_fsm.t0)
 
         if not activity.same_as(self.activity):
@@ -898,6 +901,10 @@ class ContextEngine:
     def note_notification(self, scenario: str) -> None:
         """알림 층이 발송 직후 부른다."""
         self._suppression_eval.note_notification(scenario)
+
+    def note_asleep(self, area: str | None) -> None:
+        """SLEEP_ROUTINE 이 수면을 확정했다. None 이면 깼다는 뜻이다."""
+        self._asleep_area = area
 
 
     @property

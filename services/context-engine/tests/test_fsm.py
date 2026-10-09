@@ -120,10 +120,10 @@ def test_file_log_failure_does_not_raise(tmp_path):
 # ============================================================ Meal FSM
 
 
-def test_session_opens_on_meal_prep(c):
+def test_session_opens_on_cooking(c):
     c.presence("vs-04", True)
     c.at(MORNING + 100).power("vs-06", 1180, "ON")
-    assert c.engine.activity.state == "MEAL_PREP"
+    assert c.engine.activity.state == "COOKING"
     assert c.meal.t0 is not None
 
 

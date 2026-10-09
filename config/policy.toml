@@ -157,10 +157,8 @@ fridge_recent_window_sec = 900    # 냉장고 접근을 "최근"으로 볼 창
 session_timeout_sec = 7200        # FSM 강제 종료 (2시간)
 
 [activity.sleep]
-tv_idle_for_sleep_sec = 7200      # TV 무조작 2시간 — 수면 판단의 핵심 신호
 bed_confirm_sec = 600             # 압력 패드 점유 지속
 still_for_sleep_sec = 600         # energy 바닥이 이만큼 지속돼야 SLEEPING
-wake_confirm_sec = 300            # 이탈 후 이만큼 활동하면 기상 확정
 night_start_hour = 21             # 야간으로 보는 시간대
 night_end_hour = 7
 
@@ -168,23 +166,17 @@ night_end_hour = 7
 # IN_BED_AWAKE 를 기본으로 두고 확신이 쌓일 때 SLEEPING 으로 간다 —
 # 깨어 있는 사람의 조명을 끄는 쪽이 실수 비용이 크다.
 
-[activity.weights.SLEEPING]
-bed_occupied = 0.35
-still_sustained = 0.30
-tv_idle = 0.15
-night_hours = 0.20
-
 [activity.weights.IN_BED_AWAKE]
 bed_occupied = 0.40
 moving = 0.25
 not_night = 0.15
 
-[activity.weights.WAKING]
-bed_left_recent = 0.45
-bedroom_motion = 0.20
-morning_hours = 0.15
+[activity.weights.IN_SOFA_AWAKE]
+bed_occupied = 0.35
+living_present = 0.25
+moving = 0.15
 
-[activity.weights.MEAL_PREP]
+[activity.weights.COOKING]
 cooking_on = 0.60
 kitchen_present = 0.25
 fridge_recent = 0.10
@@ -206,14 +198,6 @@ tv_on = 0.45
 living_present = 0.25
 remote_recent = 0.15
 
-[activity.weights.RESTING]
-living_present = 0.30
-bed_occupied = 0.25
-tv_off = 0.15
-
-[activity.weights.LAUNDRY]
-washer_running = 0.50
-utility_motion = 0.25
 
 # 개인 분포를 activity 점수에 반영하는 가중치.
 #
@@ -230,11 +214,11 @@ min_predictability = 0.12
 # activity 는 기억이 없다 — 매 순간 센서를 보고 다시 계산한다.
 # FSM 은 "09:20 에 시작된 것이 지금도 진행 중"을 기억하고 t0 를 보관한다.
 #
-# t0 는 활동 묶음의 시작이다. MEAL_PREP -> EATING 전이에도 유지된다.
+# t0 는 활동 묶음의 시작이다. COOKING -> EATING 전이에도 유지된다.
 # KDE 가 학습하는 것은 '식사를 시작한 시각'이고 그것은 조리를 시작한 때다.
 
 [fsm.meal]
-open_states = ["MEAL_PREP", "EATING"]   # KITCHEN_MISC 는 열지 않는다 (물 마시러 들른 것)
+open_states = ["COOKING", "EATING"]   # KITCHEN_MISC 는 열지 않는다 (물 마시러 들른 것)
 close_grace_sec = 600                   # 묶음 상태를 벗어난 뒤 이만큼 지나면 닫는다
 min_duration_sec = 120                  # 이보다 짧으면 기록하지 않는다
 session_timeout_sec = 7200              # 강제 종료 (2시간)
@@ -374,7 +358,7 @@ recheck_sec = 300
 
 
 [scenarios.sleep]
-states = ["RESTING", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"] # 수정 필요🚨
+states = ["IN_SOFA_AWAKE", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"]
 
 # 프로브 발동
 probe_still_sec = 900              # 정지 15분이면 떠본다
