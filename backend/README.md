@@ -58,6 +58,8 @@ API 문서: http://localhost:8000/docs
 | GET | `/api/v1/explanations/{id}` | 알림의 `explanationId` 로 조회 |
 | GET/PUT | `/api/v1/preferences` | 알림/개인화 설정 |
 | GET/PUT | `/api/v1/setup` | 최초 설정 (설정 전 GET 은 404) |
+| GET/POST | `/api/v1/medications` | 복약 일정 조회/추가 (추가는 201) |
+| PUT/DELETE | `/api/v1/medications/{id}` | 복약 일정 수정/삭제 (없으면 404, 삭제는 204) |
 | WS | `/ws/monitor` | 접속 시 `snapshot`, 이후 MQTT 이벤트 실시간 전달 |
 
 ### 가전 ↔ MQTT 장치 연결
@@ -65,6 +67,40 @@ API 문서: http://localhost:8000/docs
 Flutter 가전(`tv-01`)과 MQTT 장치(`vd-01`)는 `virtualId` 로 연결한다.
 비어 있으면 `hestia/registry/devices` 나 실제 상태 보고에서 **같은 종류의 장치**를 찾아
 자동으로 연결하고, 같은 공간(area)의 장치를 우선한다. 필요하면 `PUT /devices/{id}` 로 직접 지정한다.
+
+### 복약 일정
+
+홈에서 원하는 사용자만 등록한다 (최초 설정에는 없음). Backend 는 저장만 한다.
+
+```json
+{"name": "혈압약", "slots": ["BREAKFAST", "DINNER"], "mealTiming": "AFTER_MEAL_30MIN",
+ "days": 30, "startDate": "2026-10-09", "refillRequired": true}
+```
+
+| 필드 | 값 |
+|---|---|
+| `slots` | `BREAKFAST` 아침, `LUNCH` 점심, `DINNER` 저녁, `BEDTIME` 자기 전. 하루 순서로 정렬해 저장 |
+| `mealTiming` | `BEFORE_MEAL` 식전, `RIGHT_AFTER_MEAL` 식사 직후, `AFTER_MEAL_30MIN` 식후 30분. 아침·점심·저녁이 있으면 필수, 자기 전만 있으면 `null` |
+| `days` | 며칠분 (1~365) |
+| `startDate` | 복용 시작일. 비우면 등록한 날, 수정 때 비우면 기존 값 유지 |
+| `refillRequired` | 주기적으로 처방받는 약 (앱이 남은 3일부터 "처방 확인" 표시) |
+| `endDate` | 응답만. 마지막 복용일 = `startDate + days - 1` |
+
+알림 시점(식사 감지 후, 식사가 감지되지 않으면 평소 식사 시간)은 Context Engine 이 판단한다.
+
+일정이 바뀔 때마다(추가·수정·삭제) **전체 목록**을 `hestia/registry/medications` 에 retained 로 발행한다.
+MQTT 에 (재)연결될 때도 다시 발행하므로 브로커가 꺼져 있던 동안의 변경도 반영된다.
+일정이 없으면 빈 목록을 발행해 엔진이 이전 일정을 지우게 한다.
+
+```json
+{"version": 1, "sent_ts": 1791500000, "src_id": "rpi5-api",
+ "medications": [{"id": "med-08a0b745", "name": "혈압약", "slots": ["BREAKFAST", "DINNER"],
+                  "meal_timing": "AFTER_MEAL_30MIN", "days": 30, "start_date": "2026-10-09",
+                  "end_date": "2026-11-07", "refill_notice": true}]}
+```
+
+`medications` 항목은 다른 MQTT 메시지처럼 snake_case 다. REST 의 `refillRequired` 는
+`refill_notice` (남은 일수가 적을 때 처방 안내가 필요한 약)로 보낸다. 형식을 바꾸면 `version` 을 올린다.
 
 ### 알림 변환 (`hestia/notify/push` → Notification)
 
@@ -146,7 +182,7 @@ Backend 는 Context Engine 이 발행한 context/notify 를 변환·저장·전�
 `hestia/model/+`, `hestia/notify/push`, `hestia/notify/ack`, `hestia/notify/cancel`, `hestia/intervention/outcome`,
 `hestia/registry/devices`, `hestia/system/profile`
 
-발행: `hestia/notify/ack` (retain 하지 않음)
+발행: `hestia/notify/ack` (retain 하지 않음), `hestia/registry/medications` (retained)
 
 잘못된 JSON, schema 위반, 토픽과 `src_id` 불일치는 버리고 `/health` 의 `ingest` 통계에 센다.
 

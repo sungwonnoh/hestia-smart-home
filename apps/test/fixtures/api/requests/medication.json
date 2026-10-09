@@ -1,0 +1,7 @@
+{
+  "name": "혈압약",
+  "slots": ["BREAKFAST", "DINNER"],
+  "mealTiming": "AFTER_MEAL_30MIN",
+  "days": 30,
+  "refillRequired": true
+}

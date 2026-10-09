@@ -62,6 +62,9 @@ class RecordingMqtt:
     def set_handler(self, handler) -> None:
         pass
 
+    def add_on_connect(self, callback) -> None:
+        pass
+
     def start(self) -> None:
         pass
 
@@ -108,6 +111,10 @@ def collect() -> dict[str, Any]:
         # 알림 explanationId 는 decision_id 연결 확정 전까지 null 이다. 판단 id 로 직접 조회한다.
         out["explanation_by_id"] = get(f"/explanations/{out['explanations_latest']['id']}")
         out["preferences"] = get("/preferences")
+
+        medication = json.loads((REQUESTS / "medication.json").read_text(encoding="utf-8"))
+        client.post(api + "/medications", json=medication).raise_for_status()
+        out["medications"] = get("/medications")
 
         ack = client.post(f"{api}/notifications/{notifications[0]['id']}/ack",
                           json={"ackType": "SEEN"})

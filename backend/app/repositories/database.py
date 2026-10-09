@@ -89,6 +89,19 @@ CREATE TABLE IF NOT EXISTS intervention_outcomes (
     metadata_json    TEXT
 );
 
+-- 앱에서 등록한 복약 일정. slots 는 쉼표로 이은 값 (BREAKFAST,DINNER).
+CREATE TABLE IF NOT EXISTS medications (
+    id               TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    slots            TEXT NOT NULL,
+    meal_timing      TEXT,
+    days             INTEGER NOT NULL,
+    start_date       TEXT NOT NULL,
+    refill_required  INTEGER NOT NULL DEFAULT 0,
+    created_at       REAL NOT NULL,
+    updated_at       REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS app_meta (
     key    TEXT PRIMARY KEY,
     value  TEXT

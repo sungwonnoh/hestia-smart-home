@@ -91,3 +91,11 @@ def test_flutter_ack_request_marks_seen(hestia):
     topic, payload, _qos, _retain = hestia.mqtt.published[-1]
     assert topic == "hestia/notify/ack"
     assert payload["ack_type"] == "SEEN"
+
+
+def test_flutter_medication_request_is_stored_as_sent(hestia):
+    sent = load(REQUESTS / "medication.json")
+    res = hestia.post("/medications", json=sent)
+    assert res.status_code == 201
+    stored = hestia.get("/medications").json()[0]
+    assert {k: stored[k] for k in sent} == sent
