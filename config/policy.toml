@@ -56,7 +56,7 @@ area_switch_min_sec = 20          # 구역 전환 최소 지속 (오가는 떨�
 # mmWave energy 임계 — 명세: "정지/미세움직임 판정은 노드가 아니라 RPi5 가"
 [presence.energy]
 still_max = 10                    # 이 이하면 정지
-active_min = 30                   # 이 이상이면 활동 중
+moving_min = 40      # 이 위로 지속되면 깬 것 (뒤척임과 구별)
 
 # 근거별 확신도.
 #
@@ -382,14 +382,25 @@ recheck_sec = 300
 
 
 [scenarios.sleep]
-# 15분 정지하면 프로브
-still_sec = 900
-# 무응답 판정(1분)
-probe_timeout_sec = 60
-states = ["RESTING", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"]
-# 조명 프로브로 내릴 밝기. 
-probe_brightness = 70
+states = ["RESTING", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"] # 수정 필요🚨
+
+# 프로브 발동
+probe_still_sec = 900              # 정지 15분이면 떠본다
+probe_still_sec_no_channel = 1800  # 그 구역에 켜진 TV·조명 둘 다 없으면
+probe_timeout_sec = 60             # 단계별 대기
+
+# 추가 억제
+gap_after_awake_sec = 2700         # AWAKE 응답 뒤 45분
+
+# sleep_end 판정
+# moving_since는 [presence.energy]에 둔다.
+end_sustain_sec = 15               # moving_since 가 이만큼 지속돼야 sleep_end
+
+# 조명 프로브
+probe_dim_levels = [0.7, 0.3]      # 프로브 시작 시점 밝기 대비
 probe_transition_ms = 30000
+restore_brightness = 100           # 소등 감지 시 되돌릴 밝기
+
 
 # ============================================================ 안전
 #
