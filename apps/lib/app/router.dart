@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../core/widgets/state_views.dart';
 import '../features/explanation/explanation_page.dart';
+import '../features/medication/medication_edit_page.dart';
+import '../features/medication/medication_list_page.dart';
 import '../features/notifications/notification_detail_page.dart';
 import '../features/onboarding/onboarding_page.dart';
 import '../features/settings/setup_edit_pages.dart';
 import '../features/settings/system_info_page.dart';
 import '../features/splash/splash_page.dart';
+import '../models/medication.dart';
 import 'main_shell.dart';
 import 'routes.dart';
 
@@ -21,6 +24,9 @@ abstract final class AppRouter {
         NotificationDetailPage(notificationId: args),
       AppRoutes.explanation =>
         ExplanationPage(explanationId: args is String ? args : null),
+      AppRoutes.medications => const MedicationListPage(),
+      AppRoutes.medicationEdit =>
+        MedicationEditPage(initial: args is Medication ? args : null),
       AppRoutes.settingsRooms => const RoomsSettingsPage(),
       AppRoutes.settingsDevices => const DevicesSettingsPage(),
       AppRoutes.settingsNotifications => const NotificationSettingsPage(),

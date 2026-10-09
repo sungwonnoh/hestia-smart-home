@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../app/theme.dart';
 import '../../models/context_state.dart';
 import '../../models/device.dart';
+import '../../models/medication.dart';
 import '../../models/notification_item.dart';
 import '../../models/room.dart';
 
@@ -195,5 +196,32 @@ class NotificationStyle {
         'VISITOR' => Icons.door_front_door_rounded,
         'AIR_QUALITY' => Icons.air_rounded,
         _ => null,
+      };
+}
+
+/// 복약 일정 표시 문구와 아이콘.
+abstract final class MedicationLabels {
+  /// 남은 기간 문구와 강조 여부.
+  static (String, bool) period(Medication m, DateTime now) {
+    final left = m.remainingDays(now);
+    if (left == null) return ('${m.days}일분', false);
+    if (left == 0) {
+      return (m.refillRequired ? '복용 기간 끝 · 처방 확인' : '복용 기간 끝', true);
+    }
+    if (m.needsRefill(now)) return ('$left일 남음 · 처방 확인', true);
+    return ('$left일 남음', false);
+  }
+
+  static IconData slotIcon(DoseSlot slot) => switch (slot) {
+        DoseSlot.breakfast => Icons.wb_twilight_rounded,
+        DoseSlot.lunch => Icons.wb_sunny_rounded,
+        DoseSlot.dinner => Icons.dinner_dining_rounded,
+        DoseSlot.bedtime => Icons.bedtime_rounded,
+      };
+
+  static IconData timingIcon(MealTiming timing) => switch (timing) {
+        MealTiming.beforeMeal => Icons.no_meals_rounded,
+        MealTiming.rightAfterMeal => Icons.restaurant_rounded,
+        MealTiming.afterMeal30 => Icons.timer_rounded,
       };
 }
