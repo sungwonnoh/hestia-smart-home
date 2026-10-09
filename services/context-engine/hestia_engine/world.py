@@ -60,15 +60,18 @@ class PresenceState(SensorState):
     distance_cm: int = 0
     changed_at: float = 0.0        # present 전환 시각
     still_since: float | None = None   # energy 가 임계 아래로 내려간 시각
+    moving_since: float | None = None  # energy 가 moving_min 위로 올라간 시각
 
     def state_sec(self, now: float) -> float:
         return now - self.changed_at    #현재 present 값이 유지된 시간 (재실 지속은 WorldState.dwell_sec)
 
     def still_sec(self, now: float) -> float:
-        """정지 지속. 움직이는 중이면 0 반환.
-        화장실 쓰러짐 판정이 이 값을 본다 — present=true 인데 energy 가 계속 바닥인 상태.
-        """
+        """정지 지속. 움직이는 중이면 0 반환. (화장실 쓰러짐 판정에 사용)"""
         return 0.0 if self.still_since is None else now - self.still_since
+
+    def moving_sec(self, now: float) -> float:
+        """움직임 지속. 뒤척임과 기상을 가른다."""
+        return 0.0 if self.moving_since is None else now - self.moving_since
 
 
 @dataclass(slots=True)
@@ -307,13 +310,20 @@ class WorldState:
         st.energy = msg.energy
         st.distance_cm = msg.distance_cm
 
-        """policy.toml의 [presence.energy] still_max = 10을 읽어와서, energy가 그 이하면 "정지 중"으로 봄"""
         still_max = float(self._config.value("presence", "energy", "still_max", default=10))
+        moving_min = float(self._config.value("presence", "energy", "moving_min", default=40))
+
         if msg.present and msg.energy <= still_max:     #사람은 있는데 안 움직임 (mmWave 는 정지한 사람도 감지)
             if st.still_since is None and changed_ts is not None:
                 st.still_since = changed_ts
         else:
             st.still_since = None
+
+        if msg.present and msg.energy >= moving_min:
+            if st.moving_since is None and changed_ts is not None:
+                st.moving_since = changed_ts
+        else:
+            st.moving_since = None
 
         st.touch(now)        #updated_at 갱신
 
