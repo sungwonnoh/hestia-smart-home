@@ -29,6 +29,7 @@ class MqttService:
         self._client_id = client_id
         self._subscriptions = tuple(subscriptions)
         self._handler: Handler | None = None
+        self._on_connected: list[Callable[[], Any]] = []
         self._client = None
         self._connected = False
 
@@ -40,6 +41,10 @@ class MqttService:
 
     def set_handler(self, handler: Handler) -> None:
         self._handler = handler
+
+    def add_on_connect(self, callback: Callable[[], Any]) -> None:
+        """(재)연결될 때마다 부른다. retained 상태를 브로커에 다시 맞출 때 쓴다."""
+        self._on_connected.append(callback)
 
     def start(self) -> None:
         import paho.mqtt.client as mqtt
@@ -91,6 +96,11 @@ class MqttService:
         self._connected = True
         client.subscribe([(topic, 1) for topic in self._subscriptions])
         log.info("MQTT 연결됨, %d개 토픽 구독", len(self._subscriptions))
+        for callback in self._on_connected:
+            try:
+                callback()
+            except Exception:  # paho 스레드가 죽지 않게 한다
+                log.exception("MQTT 연결 후 처리 오류")
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties) -> None:
         self._connected = False
@@ -113,6 +123,9 @@ class NullMqttService:
     connected = False
 
     def set_handler(self, handler: Handler) -> None:
+        pass
+
+    def add_on_connect(self, callback: Callable[[], Any]) -> None:
         pass
 
     def start(self) -> None:

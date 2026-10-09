@@ -20,9 +20,19 @@ class FakeMqtt:
         self.connected = True
         self.published: list[tuple[str, dict[str, Any], int, bool]] = []
         self.handler = None
+        self.on_connect: list = []
 
     def set_handler(self, handler) -> None:
         self.handler = handler
+
+    def add_on_connect(self, callback) -> None:
+        self.on_connect.append(callback)
+
+    def reconnect(self) -> None:
+        """브로커 재연결 흉내: 연결 후 처리(retained 재발행)를 부른다."""
+        self.connected = True
+        for callback in self.on_connect:
+            callback()
 
     def start(self) -> None:
         pass
