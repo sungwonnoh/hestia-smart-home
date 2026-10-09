@@ -197,7 +197,7 @@ def test_periodic_rearms(c):
     for step in (301, 601, 901):
         c.clock.advance_to(MORNING + step)
         c.sched.run_due()
-    counts = [t for _, t, _ in c.pub.published if t == "hestia/context/wake"]
+    counts = [t for _, t, _ in c.pub.published if t == "hestia/context/day"]
     assert len(counts) >= 3
 
 
@@ -212,11 +212,11 @@ def test_periodic_not_pushed_by_messages(c):
     assert c.sched.next_due() == first_due or first_due is not None
 
 
-def test_snapshot_includes_wake(c):
-    """wake 는 FSM 이 들고 있어 ContextEngine.all_contexts 에 없다."""
+def test_snapshot_includes_day(c):
+    """day 는 FSM 이 들고 있어 ContextEngine.all_contexts 에 없다."""
     c.presence("vs-04", True)
     c.engine.publish_snapshot()
-    assert c.pub.last("hestia/context/wake") is not None
+    assert c.pub.last("hestia/context/day") is not None
 
 
 # ============================================================ 시스템 메시지
@@ -287,8 +287,8 @@ def test_replay_is_deterministic():
 def test_replay_produces_t0_log():
     """3주치를 재생하면 t0 로그가 쌓이고, 그것이 baseline.py 의 입력이 된다."""
     _, engine, _, t0log = replay_file(DATA, echo=False)
-    assert len(t0log.of_type("wake")) == 1
-    assert engine.context.wake_fsm.state.hydration_done is True
+    assert len(t0log.of_type("hydration")) >= 1
+    assert len(engine.context.day_fsm.state.hydrations) >= 1
 
 
 def test_replay_final_state():

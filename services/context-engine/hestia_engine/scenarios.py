@@ -9,7 +9,7 @@
 
 ②의 결과는 후보가 아니어도 발행한다. 왜 개입하지 않았는지가 왜 개입했는지만큼 중요(명세의 intervention/decision).
 
-지금은 WAKE_ROUTINE / SAFETY / SLEEP_ROUTINE 셋. MEDICATION_PROMPT 는 추가.
+지금은 HYDRATION_PROMPT / SAFETY / SLEEP_ROUTINE 셋. MEDICATION_PROMPT 는 뒤에.
 """
 
 from __future__ import annotations
@@ -19,12 +19,13 @@ from typing import Any, Callable
 from dataclasses import dataclass, replace
 
 from .control import Controller
-from .timeutil import day_key
+from .timeutil import KST, day_key, hhmm
+from datetime import datetime
 
 from .clock import Clock
 from .config import Config
 from .notify import Notifier
-from .world import PresenceState, BedState, WorldState
+from .world import PresenceState, BedState, ClimateState, WorldState
 from .policy import Decision, InterventionPolicy
 from .fsm import T0Entry
 
@@ -95,16 +96,41 @@ class ScenarioRunner:
         self._last_awake_at: float | None = None
         self._pending_restore: tuple[str, int] | None = None
         self._probe_base: dict[str, int] = {}
+        self._awake_areas: set[str] | None = None   # None = sleep_end 를 못 봤다
         self._seq = 0
+
+        # 수분
+        self._last_dispensed_at: float | None = None
+        self._last_sleep_end_at: float | None = None
+        self._notify_count = 0                 # 급수·sleep_end 에서 리셋
+        self._last_notify_at: float | None = None
+        self._daily_ml = 0
+        self._hydration_day: str | None = None
+        self._air_stress_sent = False          # HEAT + DRY 합산 하루 1회
+        self._hot = False                      # 히스테리시스
+        self._dry = False
+        self._daily_short_sent = False
+        self._last_away_state: str | None = None
+        self._away_since: float | None = None
+        self._returned_at: float | None = None
+        self._return_sent = False
 
     def tick(self, context: Any) -> list[tuple[str, float]]:
         """시나리오를 전부 훑는다. 조건에 안 맞으면 조용히 지나간다."""
+        self._context = context
         timers: list[tuple[str, float]] = []
-        timers += self._wake_routine(context)
+        timers += self._hydration_prompt(context)
         timers += self._safety(context)
         timers += self._sleep_routine(context)
         return timers
 
+    def note_hydration(self, amount_ml: int) -> None:
+        """정수기 급수. ContextEngine 이 이벤트마다 부른다."""
+        now = self._clock.now()
+        self._roll_hydration_day(now)
+        self._last_dispensed_at = now
+        self._daily_ml += amount_ml
+        self._notify_count = 0          # 마셨으면 반복 카운터를 푼다
 
      # ------------------------------------------------------------ SLEEP_ROUTINE
 
@@ -114,6 +140,10 @@ class ScenarioRunner:
 
         # 내려둔 조명은 사용자가 끈 뒤에 조용히 되돌린다
         self._restore_if_off()
+
+                # 내려둔 조명은 사용자가 끈 뒤에 조용히 되돌린다
+        self._restore_if_off()
+        self._track_awake_areas(context)
 
         if self._probe is not None:
             return self._check_probe(context, now)
@@ -126,7 +156,11 @@ class ScenarioRunner:
                     kind="sleep", candidate=False, reason="WOKE",
                     factors={"area": self.asleep.area},
                 ))
+                self._last_sleep_end_at = woke_at
+                self._notify_count = 0      # 깼으면 반복 카운터를 푼다
+                self._awake_areas = set()
                 self.asleep = None
+                self._notify_asleep(None)
             return []
 
         # AWAKE 로 답한 직후에는 다시 묻지 않는다
@@ -168,7 +202,7 @@ class ScenarioRunner:
         """자는지 확인할 만한 상태인가. 그렇다면 어느 구역인가."""
         states = tuple(self._sleep_value(
             "states",
-            ["RESTING", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"],
+            ["IN_SOFA_AWAKE", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"],
         ))
         activity = getattr(context, "activity", None)
         if activity is None or activity.state not in states:
@@ -362,10 +396,13 @@ class ScenarioRunner:
         self._log_sleep(
             "sleep_start", still_since,
             area=area, method=method, confidence=confidence,
+            awake_areas=self._take_awake_areas(area),
         )
         self.asleep = AsleepState(
             since=still_since, area=area, decision_id=decision_id,
         )
+        self._notify_asleep(area)
+
         # 확정했으면 끈다. 되돌리기는 꺼진 뒤에 일어난다.
         if probe is not None and probe.target is not None:
             self._controller.set(
@@ -373,10 +410,12 @@ class ScenarioRunner:
                 reason="SLEEP_ROUTINE", priority="low",
             )
 
+
     def _log_sleep(
         self, type_: str, t0: float, *,
         area: str | None = None, method: str | None = None,
         confidence: float | None = None,
+        awake_areas: tuple[str, ...] | None = None,
     ) -> None:
         if self._t0log is None:
             return
@@ -384,6 +423,7 @@ class ScenarioRunner:
             date=day_key(t0), type=type_, t0=t0,
             source="sensor", prompted=False, duration_sec=0.0,
             area=area, method=method, confidence=confidence,
+            awake_areas=awake_areas,
         ))
 
     # 깸 판정
@@ -465,6 +505,25 @@ class ScenarioRunner:
             target, brightness=level,
             reason="SLEEP_ROUTINE", priority="low",
         )
+
+    def _track_awake_areas(self, context: Any) -> None:
+        """sleep_end 이후 들른 구역을 모은다."""
+        if self._awake_areas is None or self.asleep is not None:
+            return
+        presence = getattr(context, "presence", None)
+        if presence is not None and presence.user_area:
+            self._awake_areas.add(presence.user_area)
+
+    def _take_awake_areas(self, area: str | None) -> tuple[str, ...] | None:
+        """잠든 구역은 뺀다 — area 에 이미 있다.
+        None 은 '모른다' 다. 재시작으로 직전 sleep_end 를 못 본 경우이며,
+        빈 배열('나가지 않았다')과 구별해야 배치가 잘못 잇지 않는다.
+        """
+        if self._awake_areas is None:
+            return None
+        out = tuple(sorted(self._awake_areas - {area}))
+        self._awake_areas = None
+        return out
     
 
     # ------------------------------------------------------------ SAFETY
@@ -530,63 +589,43 @@ class ScenarioRunner:
             return timers          # 한 번에 하나만
 
         return timers
-    
-    
-    # ------------------------------------------------------------ WAKE_ROUTINE
 
-    def _wake_routine(self, context: Any) -> list[tuple[str, float]]:
-        """기상 후 수분 섭취.
 
-        시나리오 4. 기상하고 평소보다 오래 물을 마시지 않으면 권한다. hydration_lag 분포를 쓰는 것이 핵심이다 — "몇 시에" 가 아니라 "기상하고 몇 분 만에" 가 이 사람의 패턴이다.
+    # ------------------------------------------------------------ HYDRATION_PROMPT
+
+    def _hydration_prompt(self, context: Any) -> list[tuple[str, float]]:
+        """수분 섭취.
+
+        meal 과 달리 분포를 쓰지 않는다. 기상 기준이 사라져 hydration_lag 을
+        잴 수 없고, 급수는 '몇 시에' 가 아니라 '얼마 만에' 의 문제다.
+        reason 여섯이 한 시나리오를 공유하며, 사용자가 받는 것은 모두
+        "물 한 잔 드세요" 다.
         """
-        timers: list[tuple[str, float]] = []
-        wake = context.wake_fsm.state
-
-        # ① 트리거 — 기상했고, 아직 안 마셨고, 집에 있어야 한다
-        if wake.state != "AWAKE" or wake.wake_t0 is None:
-            return timers
-        if wake.hydration_done:
-            return timers
-
-        # 기상 직후 몇 분은 묻지 않는다. 일어나자마자 물을 마시는
-        # 사람도 있고, 화장실부터 가는 사람도 있다.
         now = self._clock.now()
-        grace = float(
-            self._config.value("scenarios", "wake", "hydration_grace_sec", default=900)
-        )
-        if now - wake.wake_t0 < grace:
-            return [("wake-hydration", wake.wake_t0 + grace)]
+        self._roll_hydration_day(now)
+        self._track_away(context, now)
+        self._track_air(now)
 
-        # ② 판정 — 개인 분포에서 지금이 이상하게 늦은가
-        decision = self._policy.evaluate_hydration(
-            context.away,
-            context.occupancy,
-            context.suppression,
-            wake_t0=wake.wake_t0,
-            hydration_done=wake.hydration_done,
-        )
-        decision_id = self._emit_decision(decision)
+        if self._in_pause(now):
+            # 정숙 시간에 쌓인 1회성 조건은 버린다. 6시에 몰아서 보내면
+            # 사용자는 '왜 지금' 을 알 수 없다.
+            self._returned_at = None
+            return []
 
-        if not decision.candidate:      # 아직 평소 범위
-            recheck = float(
-                self._config.value("scenarios", "wake", "recheck_sec", default=300)
-            )
-            return [("wake-hydration", now + recheck)]
+        if self.asleep is not None:
+            return []
 
-        # ③ 발송
-        self._notifier.send(
-            scenario="WAKE_ROUTINE",
-            title=str(self._notify_value("WAKE_ROUTINE", "title", "수분 섭취")),
-            text=str(self._notify_value("WAKE_ROUTINE", "text", "물 한 잔 드세요")),
-            priority=str(self._notify_value("WAKE_ROUTINE", "priority", "normal")),
-            presence=context.presence,
-            suppression=context.suppression,
-            comply_kind="hydration",
-            comply_check="wake",
-            decision_id=decision_id,
-            confidence=decision.confidence,
-        )
-        return timers
+        reason, at = self._hydration_reason(context, now)
+        if reason is None:
+            return self._hydration_timers(now)
+
+        # 예약과 발송 사이에 마셨을 수 있다
+        if self._last_dispensed_at is not None and self._last_dispensed_at > at:
+            return self._hydration_timers(now)
+
+        self._send_hydration(context, reason, now)
+        return self._hydration_timers(now)
+    
 
     # ------------------------------------------------------------ 판정 발행
 
@@ -608,10 +647,82 @@ class ScenarioRunner:
         log.debug("판정 %s %s candidate=%s", decision_id, d.kind, d.candidate)
         return decision_id
 
+    def _hydration_reason(self, context: Any, now: float) -> tuple[str | None, float]:
+        """어떤 이유로 권하나. 없으면 (None, 0).
+
+        순서가 곧 우선순위다. 겹칠 때 하나만 나간다 — 사용자가 받는 것은
+        어느 쪽이든 같은 알림이다.
+        """
+        # 외출 후 귀가 — LONG_GAP 이 거의 같은 것을 잡지만 문구가 다르다
+        if (
+            self._returned_at is not None
+            and not self._return_sent
+            and now - self._returned_at >= float(self._hyd("return_delay_sec", 600))
+        ):
+            return "RETURNED_HOME", self._returned_at
+
+        # 더워짐·건조해짐 — 전이 시점에 한 번. 둘 다면 HEAT 가 우선
+        if not self._air_stress_sent:
+            if self._hot:
+                return "HEAT_ONSET", now
+            if self._dry:
+                return "DRY_ONSET", now
+
+        # 일일 권장량 — 20시에 한 번. 외출 중이면 그날은 건너뛴다
+        hour = datetime.fromtimestamp(now, KST).hour
+        if (
+            not self._daily_short_sent
+            and hour >= int(self._hyd("checkpoint_hour", 20))
+            and self._daily_ml < int(self._hyd("daily_target_ml", 1500))
+        ):
+            return "DAILY_SHORT", now
+
+        # 간격 — 마지막 급수 또는 sleep_end 중 늦은 쪽부터
+        if self._notify_count >= int(self._hyd("max_repeat", 2)):
+            return None, 0.0
+
+        gap_from, gap, reason = self._hydration_gap()
+        if gap_from is None:
+            return None, 0.0
+        if now - gap_from < gap:
+            return None, 0.0
+
+        # 알림 뒤 최소 간격
+        renotify = float(self._hyd("renotify_sec", 7200))
+        if self._last_notify_at is not None and now - self._last_notify_at < renotify:
+            return None, 0.0
+
+        return reason, gap_from
+
+    def _hydration_gap(self) -> tuple[float | None, float, str]:
+        """간격의 기준점과 길이. 자는 동안은 세지 않는다.
+
+        sleep_end 가 더 늦으면 깬 뒤부터 2시간 — 밤새 무급수였으니
+        아침 한 잔이 필요하고, 그 자리를 WAKE_ROUTINE 이 맡던 것이다.
+        """
+        drank = self._last_dispensed_at
+        woke = self._last_sleep_end_at
+
+        if woke is not None and (drank is None or woke > drank):
+            return woke, float(self._hyd("sleep_end_gap_sec", 7200)), "SLEEP_END"
+        if drank is None:
+            return None, 0.0, "LONG_GAP"
+
+        gap = float(
+            self._hyd("short_gap_sec", 10800) if (self._hot or self._dry)
+            else self._hyd("gap_sec", 14400)
+        )
+        return drank, gap, "LONG_GAP"
+
     # ------------------------------------------------------------ 내부
 
     def _notify_value(self, scenario: str, key: str, default: Any) -> Any:
         return self._config.notify_policy(scenario).get(key, default)
+
+    def _notify_asleep(self, area: str | None) -> None:
+        ctx = getattr(self, "_context", None)
+        if ctx is not None:
+            ctx.note_asleep(area)
 
     def _next_id(self) -> str:
         self._seq += 1
@@ -639,3 +750,166 @@ class ScenarioRunner:
             if isinstance(s, BedState):
                 return s
         return None
+
+
+    def _send_hydration(self, context: Any, reason: str, now: float) -> None:
+        decision_id = self._emit_decision(Decision(
+            kind="hydration",
+            candidate=True,
+            reason=reason,
+            confidence=1.0,
+            factors={
+                "daily_ml": self._daily_ml,
+                "notify_count": self._notify_count,
+                "hot": self._hot,
+                "dry": self._dry,
+            },
+        ))
+
+        notify_id = self._notifier.send(
+            scenario="HYDRATION_PROMPT",
+            title=str(self._notify_value("HYDRATION_PROMPT", "title", "수분 섭취")),
+            text=self._hydration_text(reason),
+            priority=str(self._notify_value("HYDRATION_PROMPT", "priority", "normal")),
+            presence=getattr(context, "presence", None),
+            suppression=getattr(context, "suppression", None),
+            comply_kind="hydration",
+            comply_check="done",
+            decision_id=decision_id,
+        )
+        if notify_id is None:
+            return
+
+        self._last_notify_at = now
+        if reason in ("LONG_GAP", "SLEEP_END"):
+            self._notify_count += 1
+        elif reason in ("HEAT_ONSET", "DRY_ONSET"):
+            self._air_stress_sent = True
+        elif reason == "DAILY_SHORT":
+            self._daily_short_sent = True
+        elif reason == "RETURNED_HOME":
+            self._return_sent = True
+
+    def _hydration_text(self, reason: str) -> str:
+        """맥락이 보이는 문구가 더 설득력 있다.
+
+        권장량은 정수기 물만 세므로 실제보다 적게 나온다 — 생수나 커피는
+        잡히지 않는다. 그래서 단정하지 않는다.
+        """
+        default = {
+            "LONG_GAP": "물 한 잔 드세요",
+            "SLEEP_END": "일어나셨네요, 물 한 잔 드세요",
+            "HEAT_ONSET": "더운 날이에요, 물 한 잔 드세요",
+            "DRY_ONSET": "공기가 건조해요, 물 한 잔 드세요",
+            "DAILY_SHORT": "오늘 물을 조금 더 드시면 좋겠습니다",
+            "RETURNED_HOME": "외출하셨네요, 물 한 잔 드세요",
+        }[reason]
+        return str(self._notify_value("HYDRATION_PROMPT", f"text_{reason}", default))
+
+    def _track_away(self, context: Any, now: float) -> None:
+        """AWAY -> HOME 전이. 2시간 넘게 나갔다 온 경우만 센다.
+
+        away context 의 since 는 상태가 유지되는 동안 승계되므로,
+        HOME 으로 바뀐 뒤에 읽으면 거의 0 이다. 나가 있던 길이는
+        AWAY 인 동안 따로 들고 있어야 한다.
+
+        UNKNOWN 에서 온 것은 제외한다 — 나갔는지 쓰러졌는지 모른다.
+        """
+        away = getattr(context, "away", None)
+        if away is None:
+            return
+
+        if away.state == "AWAY":
+            self._away_since = away.since
+        elif self._last_away_state == "AWAY" and away.state == "HOME":
+            if self._away_since is not None:
+                gone = now - self._away_since
+                if gone >= float(self._hyd("return_min_away_sec", 7200)):
+                    self._returned_at = now
+                    self._return_sent = False
+            self._away_since = None
+
+        self._last_away_state = away.state
+
+    def _track_air(self, now: float) -> None:
+        """덥거나 건조한가. 27.9 ↔ 28.1 로 울리지 않게 히스테리시스를 둔다.
+
+        실내 센서만 본다. 폭염 특보(external/weather)는 토픽이 아직 없어
+        붙이지 않았고, 들어오면 OR 로 합친다.
+        """
+        st = self._climate()
+        if st is None:
+            return
+
+        hot_in = float(self._hyd("hot_temp_c", 28))
+        hot_out = float(self._hyd("hot_exit_c", 26))
+        dry_in = float(self._hyd("dry_humidity_pct", 35))
+        dry_out = float(self._hyd("dry_exit_pct", 40))
+
+        self._hot = (
+            st.temperature_c >= hot_in if not self._hot
+            else st.temperature_c > hot_out
+        )
+        self._dry = (
+            st.humidity_pct <= dry_in if not self._dry
+            else st.humidity_pct < dry_out
+        )
+
+    def _roll_hydration_day(self, now: float) -> None:
+        today = day_key(now)
+        if self._hydration_day != today:
+            self._hydration_day = today
+            self._daily_ml = 0
+            self._air_stress_sent = False
+            self._daily_short_sent = False
+
+    def _hydration_timers(self, now: float) -> list[tuple[str, float]]:
+        """다음에 조건이 성립할 만한 시각들. 센서가 조용해도 걸려야 한다."""
+        out: list[tuple[str, float]] = []
+
+        if self._returned_at is not None and not self._return_sent:
+            out.append((
+                "hydration-return",
+                self._returned_at + float(self._hyd("return_delay_sec", 600)),
+            ))
+
+        gap_from, gap, _ = self._hydration_gap()
+        if gap_from is not None and self._notify_count < int(self._hyd("max_repeat", 2)):
+            out.append(("hydration-gap", gap_from + gap))
+            if self._last_notify_at is not None:
+                out.append((
+                    "hydration-renotify",
+                    self._last_notify_at + float(self._hyd("renotify_sec", 7200)),
+                ))
+
+        if not self._daily_short_sent:
+            at = self._today_at(int(self._hyd("checkpoint_hour", 20)), now)
+            if at > now:
+                out.append(("hydration-daily", at))
+
+        return [(k, t) for k, t in out if t > now]
+
+    def _in_pause(self, now: float) -> bool:
+        """권하지 않는 시간대."""
+        start = hhmm(str(self._hyd("pause_start", "22:00")))
+        end = hhmm(str(self._hyd("pause_end", "06:00")))
+        dt = datetime.fromtimestamp(now, KST)
+        minutes = dt.hour * 60 + dt.minute
+        if start <= end:
+            return start <= minutes < end
+        return minutes >= start or minutes < end
+
+    def _today_at(self, hour: int, now: float) -> float:
+        dt = datetime.fromtimestamp(now, KST).replace(
+            hour=hour, minute=0, second=0, microsecond=0
+        )
+        return dt.timestamp()
+
+    def _climate(self) -> ClimateState | None:
+        for st in self._world.sensors.values():
+            if isinstance(st, ClimateState):
+                return st
+        return None
+
+    def _hyd(self, key: str, default: Any) -> Any:
+        return self._config.value("scenarios", "hydration", key, default=default)

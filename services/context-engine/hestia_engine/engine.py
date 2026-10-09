@@ -152,7 +152,7 @@ class Engine:
         self.notifier = Notifier(
             clock, config, world, scheduler,
             publish=self._publish_raw,
-            wake_fsm=self.context.wake_fsm,
+            day_fsm=self.context.day_fsm,
             note_sent=self.context.note_notification,
         )
 
@@ -166,6 +166,7 @@ class Engine:
             suppression=self.context._suppression_eval,
             t0log=t0log,
         )
+        self.context._on_hydration = self.scenarios.note_hydration
 
         self.received = 0
         self.dropped = 0
@@ -178,7 +179,7 @@ class Engine:
         """기동 시 디스크에 남은 오늘 기록을 되살린다.
            retained 로 복원되지 않는 것들이 있다 — 이벤트는 보관되지 않으므로 '아침에 물을 마셨다' 는 사실이 돌아오지 않는다.
         """
-        self.context.wake_fsm.restore()
+        self.context.day_fsm.restore()
 
     def ingest(self, topic: str, payload: bytes | str, *, retained: bool = False) -> None:
         """수신 메시지 한 건. Sink 프로토콜의 유일한 메서드."""
@@ -272,7 +273,7 @@ class Engine:
 
     def _all_contexts(self) -> tuple[Context, ...]:
         """wake 는 ContextEngine 이 아니라 FSM 이 들고 있다."""
-        return (*self.context.all_contexts(), self.context.wake_fsm.state)
+        return (*self.context.all_contexts(), self.context.day_fsm.state)
 
     # ------------------------------------------------------------ 주기 발행
 

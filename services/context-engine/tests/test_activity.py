@@ -231,17 +231,21 @@ def night(tmp_path):
 # ============================================================ 상태 정의
 
 
-def test_twelve_states():
-    assert len(ACTIVITY_STATES) == 12
+def test_ten_states():
+    assert len(ACTIVITY_STATES) == 10
     assert "TRANSITION" not in ACTIVITY_STATES
     assert "ACTIVE" not in ACTIVITY_STATES
     assert "FOCUSED" not in ACTIVITY_STATES
+    assert "WAKING" not in ACTIVITY_STATES        # 기상 판정을 엔진에서 뺐다
+    assert "RESTING" not in ACTIVITY_STATES       # WATCHING_TV 와 구별되지 않았다
+    assert "LAUNDRY" not in ACTIVITY_STATES       # 세탁기 state 로 충분하다
 
 
-def test_hmm_reduction_to_eight():
-    assert len(set(HMM_STATES.values())) == 8
+def test_hmm_reduction_to_six():
+    assert len(set(HMM_STATES.values())) == 6
     assert HMM_STATES["IN_BED_AWAKE"] == "SLEEPING"
-    assert HMM_STATES["EATING"] == "MEAL"
+    assert HMM_STATES["IN_SOFA_AWAKE"] == "SLEEPING"
+    assert HMM_STATES["COOKING"] == "MEAL"
     assert HMM_STATES["WATCHING_TV"] == "RESTING"
 
 
@@ -262,44 +266,58 @@ def test_bed_without_sustained_stillness_is_awake(night):
     assert night.a.state == "IN_BED_AWAKE"
 
 
-def test_sustained_stillness_at_night_is_sleeping(night):
+def test_stillness_alone_is_not_sleeping(night):
+    """정지가 아무리 길어도 점수로는 SLEEPING 이 되지 않는다.
+
+    잠들었는지는 센서로 알 수 없다 — SLEEP_ROUTINE 이 프로브로 확정한다.
+    """
     night.bed("vs-09", True)
     night.presence("vs-08", True, energy=5)
-    night.at(NIGHT + 700).tick()                    # still_for_sleep_sec = 600
+    night.at(NIGHT + 700).tick()
+    assert night.a.state == "IN_BED_AWAKE"
+    assert "SLEEPING" not in night.a.scores
+
+
+def test_confirmed_sleep_wins(night):
+    """프로브가 확정하면 SLEEPING 이다."""
+    night.bed("vs-09", True)
+    night.presence("vs-08", True, energy=5)
+    night.engine.note_asleep("bedroom")
+    night.at(NIGHT + 700).tick()
+    assert night.a.state == "SLEEPING"
+    assert night.a.factors["asleep_area"] == "bedroom"
+
+
+def test_sofa_sleep_is_also_sleeping(night):
+    """소파에서 자도 같은 경로를 탄다. 침실 전용이 아니다."""
+    night.bed("vs-02", True)
+    night.presence("vs-01", True, energy=5)
+    assert night.a.state == "IN_SOFA_AWAKE"
+
+    night.engine.note_asleep("living")
+    night.at(NIGHT + 100).tick()
     assert night.a.state == "SLEEPING"
 
 
-def test_daytime_nap_scores_lower(c):
-    """낮에는 night_hours 가산점이 없어 SLEEPING 이 되기 어렵다."""
-    c.bed("vs-09", True)
-    c.presence("vs-08", True, energy=5)
-    c.at(MORNING + 700).tick()
-    assert c.a.scores["SLEEPING"] < c.a.scores["IN_BED_AWAKE"] + 0.3
+def test_waking_clears_sleeping(night):
+    night.bed("vs-09", True)
+    night.presence("vs-08", True, energy=5)
+    night.engine.note_asleep("bedroom")
+    night.at(NIGHT + 100).tick()
+    assert night.a.state == "SLEEPING"
 
-
-def test_waking_after_bed_left(c):
-    c.bed("vs-09", True)
-    c.at(MORNING + 100).bed("vs-09", False)
-    c.presence("vs-08", True, energy=50)
-    assert c.a.state == "WAKING"
-
-
-def test_waking_expires(c):
-    c.bed("vs-09", True)
-    c.at(MORNING + 100).bed("vs-09", False)
-    c.presence("vs-08", True, energy=50)
-    assert c.a.state == "WAKING"
-    c.at(MORNING + 2000).tick()                     # wake_confirm_sec * 3 초과
-    assert c.a.state != "WAKING"
+    night.engine.note_asleep(None)
+    night.at(NIGHT + 200).tick()
+    assert night.a.state == "IN_BED_AWAKE"
 
 
 # ============================================================ 식사
 
 
-def test_cooking_is_meal_prep(c):
+def test_cooking_is_cooking(c):
     c.presence("vs-04", True)
     c.at(MORNING + 100).power("vs-06", 1180, state="ON")
-    assert c.a.state == "MEAL_PREP"
+    assert c.a.state == "COOKING"
 
 
 def test_eating_after_cooking_stops(c):
@@ -348,41 +366,36 @@ def test_bathroom(c):
 
 
 def test_tv_on_is_watching(c):
-    """센서 신호는 RESTING 과 동일하다. TV 전원으로만 갈린다."""
+    """소파 패드가 없으면 TV 전원으로만 갈린다."""
     c.presence("vs-01", True)
     c.at(MORNING + 100).tv("ON")
     c.remote()
     assert c.a.state == "WATCHING_TV"
 
 
-def test_tv_off_with_sofa_is_resting(c):
+def test_tv_off_with_sofa_is_sofa_awake(c):
     c.presence("vs-01", True)
     c.tv("OFF")
     c.bed("vs-02", True)
-    assert c.a.state == "RESTING"
+    assert c.a.state == "IN_SOFA_AWAKE"
 
 
-def test_tv_on_outranks_resting(c):
+def test_tv_on_outranks_sofa(c):
+    """소파에 앉아 TV 를 보면 WATCHING_TV 다. 둘 다 성립할 때의 순위."""
     c.presence("vs-01", True)
-    c.bed("vs-02", True)
     c.tv("ON")
     c.remote()
-    assert c.a.scores["WATCHING_TV"] > c.a.scores["RESTING"]
+    c.bed("vs-02", True)
+    assert c.a.scores["WATCHING_TV"] > c.a.scores["IN_SOFA_AWAKE"]
+    assert c.a.state == "WATCHING_TV"
 
 
-# ============================================================ 세탁
-
-
-def test_washer_running_is_laundry(c):
-    c.washer("WASH")
-    c.motion("vs-13", True)
-    assert c.a.state == "LAUNDRY"
-
-
-def test_washer_idle_is_not_laundry(c):
-    c.washer("IDLE")
-    c.motion("vs-13", True)
-    assert c.a.state != "LAUNDRY"
+def test_living_without_sofa_or_tv_is_unknown(c):
+    """거실에 있다는 사실만으로는 상태가 정해지지 않는다.
+    근거 없이 상태를 붙이지 않는다 (open-set)."""
+    c.presence("vs-01", True)
+    c.tv("OFF")
+    assert c.a.state == "UNKNOWN"
 
 
 # ============================================================ UNKNOWN
@@ -396,9 +409,9 @@ def test_no_evidence_is_unknown(c):
 
 def test_below_min_score_is_unknown(c):
     """모르면 모른다고 하는 쪽이, 억지로 고르고 개입을 얹는 것보다 낫다."""
-    c.washer("WASH")                                # 0.50 단독
-    # utility 재실 없음 → 0.50. min_score 0.35 는 넘는다
-    assert c.a.state == "LAUNDRY"
+    c.presence("vs-01", True)
+    c.tv("OFF")                                 # 거실 재실뿐, 근거 없음
+    assert c.a.state == "UNKNOWN"
 
 
 def test_sensor_fault_is_unknown(c):
@@ -421,9 +434,9 @@ def test_away_follows_away_context(c):
 
 def test_single_candidate_is_not_fully_confident(c):
     """후보가 하나뿐이어도 근거가 약하면 확신도가 낮아야 한다."""
-    c.washer("WASH")                                # LAUNDRY 0.50 단독
-    assert c.a.state == "LAUNDRY"
-    assert c.a.confidence == pytest.approx(0.50)    # 1.0 이 아니다
+    c.presence("vs-11", True)                   # BATHROOM 0.85 단독
+    assert c.a.state == "BATHROOM"
+    assert c.a.confidence == pytest.approx(0.85)
 
 # ============================================================ 안정화
 
@@ -431,11 +444,11 @@ def test_single_candidate_is_not_fully_confident(c):
 def test_hysteresis_keeps_current_state(c):
     c.presence("vs-04", True)
     c.at(MORNING + 100).power("vs-06", 1180, state="ON")
-    assert c.a.state == "MEAL_PREP"
+    assert c.a.state == "COOKING"
     assert c.a.factors.get("hysteresis_on") == "KITCHEN_MISC"   # 직전 상태
 
     c.at(MORNING + 200).tick()
-    assert c.a.factors["hysteresis_on"] == "MEAL_PREP"
+    assert c.a.factors["hysteresis_on"] == "COOKING"
 
 
 def test_min_hold_prevents_flapping(c):
@@ -513,7 +526,7 @@ def test_confidence_is_share_of_total(c):
     c.at(MORNING + 100).power("vs-06", 1180, state="ON")
     scores = c.a.scores
     total = sum(scores.values())
-    top = scores["MEAL_PREP"]
+    top = scores["COOKING"]
     assert len(scores) > 1
     assert c.a.confidence == pytest.approx(min(1.0, top) * (top / total))
 
@@ -548,5 +561,5 @@ def test_morning_scenario_reaches_eating():
     Replay(clock, sched, Feed()).run(Path(__file__).parent / "data" / "morning.jsonl")
 
     assert "BATHROOM" in seen
-    assert "MEAL_PREP" in seen
+    assert "COOKING" in seen
     assert engine.activity.state in ("EATING", "KITCHEN_MISC")

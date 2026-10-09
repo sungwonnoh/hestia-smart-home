@@ -3,13 +3,14 @@
 presence 와 성격이 다르다. 센서가 "사람이 있다"는 직접 말해주지만
 "식사 중"이라고 말해주는 센서는 없다. 여러 신호를 모아 추론해야 한다.
 
-12종 각각에 점수를 매기고 가장 높은 것을 고른다.
+10종 각각에 점수를 매기고 가장 높은 것을 고른다.
 if-else 사슬이 아닌 이유:
   - 조건 순서가 결과를 바꾼다. 상태가 늘면 순서 정하기가 설계 결정이 된다.
   - 1등과 나머지의 격차가 곧 confidence 다.
 
-가전이 결정적이다. WATCHING_TV / RESTING 은 센서 신호가 동일하고
-TV 전원과 remote_input 으로만 갈린다.
+가전과 압력 패드가 결정적이다. 거실에 있다는 사실만으로는 상태가 정해지지
+않고, TV 전원과 소파 압력 패드로 WATCHING_TV / IN_SOFA_AWAKE 가 갈린다.
+둘 다 없으면 UNKNOWN 이다.
 
 UNKNOWN 이 자주 나오는 것은 실패가 아니다 (명세: open-set).
 모르면 모른다고 하는 쪽이, 억지로 고르고 그 위에 개입을 얹는 것보다 낫다.
@@ -33,25 +34,23 @@ log = logging.getLogger(__name__)
 # 명세의 activity state. TRANSITION / ACTIVE / FOCUSED 는 쓰지 않는다 —
 # 셋 다 '다른 걸로 설명 안 되는 나머지'라 UNKNOWN 과 구별되지 않았다.
 ACTIVITY_STATES = (
-    "SLEEPING", "IN_BED_AWAKE", "WAKING",
-    "MEAL_PREP", "EATING", "KITCHEN_MISC",
+    "SLEEPING", "IN_BED_AWAKE", "IN_SOFA_AWAKE",
+    "COOKING", "EATING", "KITCHEN_MISC",
     "BATHROOM",
-    "WATCHING_TV", "RESTING", "LAUNDRY",
+    "WATCHING_TV",
     "AWAY", "UNKNOWN",
 )
 
-# HMM 학습용 축약 (8종). 전이행렬을 3주 데이터로 채우려면 묶어야 한다.
+# HMM 학습용 축약 (6종). 전이행렬을 3주 데이터로 채우려면 묶어야 한다.
 HMM_STATES = {
     "SLEEPING": "SLEEPING",
     "IN_BED_AWAKE": "SLEEPING",
-    "WAKING": "WAKING",
-    "MEAL_PREP": "MEAL",
+    "IN_SOFA_AWAKE": "SLEEPING",
+    "COOKING": "MEAL",
     "EATING": "MEAL",
     "KITCHEN_MISC": "MEAL",
     "BATHROOM": "BATHROOM",
     "WATCHING_TV": "RESTING",
-    "RESTING": "RESTING",
-    "LAUNDRY": "LAUNDRY",
     "AWAY": "AWAY",
     "UNKNOWN": "OTHER",
 }
@@ -79,7 +78,7 @@ class ActivityContext(Context):
 
 
 class ActivityEvaluator:
-    """12종 점수를 계산하고 하나를 고른다."""
+    """10종 점수를 계산하고 하나를 고른다."""
 
     def __init__(self, clock: Clock, config: Config, world: WorldState, models: Any | None = None,) -> None:
         self._clock = clock
@@ -92,6 +91,7 @@ class ActivityEvaluator:
         presence: PresenceContext,
         away: AwayContext,
         prev: ActivityContext | None,
+        asleep_area: str | None = None,
     ) -> tuple[ActivityContext, list[tuple[str, float]]]:
         now = self._clock.now()
         timers: list[tuple[str, float]] = []
@@ -106,6 +106,11 @@ class ActivityEvaluator:
             return self._build("UNKNOWN", None, {}, 0.0, factors, prev, now), timers
 
         scores = self._score_all(presence, factors, now)
+
+        # 수면은 점수로 정하지 않는다. SLEEP_ROUTINE 이 프로브로 확정한 것만 SLEEPING 이다 — 침실이든 소파든 같은 경로를 탄다.
+        if asleep_area is not None:
+            factors["asleep_area"] = asleep_area
+            scores["SLEEPING"] = 1.0
 
         # 히스테리시스 — 현재 상태를 유지하는 쪽에 가산점.
         # 0.52 / 0.51 에서 초마다 뒤집히는 것을 막는다.
@@ -141,7 +146,6 @@ class ActivityEvaluator:
         w = self._weights
         s: dict[str, float] = {}
 
-        area = presence.user_area
         hour = datetime.fromtimestamp(now, KST).hour
         night = self._is_night(hour)
         factors["hour"] = hour
@@ -149,24 +153,12 @@ class ActivityEvaluator:
         # ---- 수면·기상
         bed = self._bed_in("bedroom")
         if bed is not None and bed.occupied:
-            bed_sec = bed.occupied_sec(now)
             still_sec = self._world.still_sec("bedroom")
-            tv_idle = self._world.since_any_event("smart_tv", "remote_input")
-            still_need = float(self._config.value("activity", "sleep", "still_for_sleep_sec", default=600))
-            tv_need = float(self._config.value("activity", "sleep", "tv_idle_for_sleep_sec", default=7200))
-
-            factors["bed_occupied_sec"] = round(bed_sec)
+            still_need = float(self._config.value(
+                "activity", "sleep", "still_for_sleep_sec", default=600
+            ))
+            factors["bed_occupied_sec"] = round(bed.occupied_sec(now))
             factors["bedroom_still_sec"] = round(still_sec)
-            factors["tv_idle_sec"] = None if tv_idle is None else round(tv_idle)
-
-            sleeping = w("SLEEPING", "bed_occupied")
-            if still_sec >= still_need:
-                sleeping += w("SLEEPING", "still_sustained")
-            if tv_idle is not None and tv_idle >= tv_need:
-                sleeping += w("SLEEPING", "tv_idle")
-            if night:
-                sleeping += w("SLEEPING", "night_hours")
-            s["SLEEPING"] = sleeping
 
             awake = w("IN_BED_AWAKE", "bed_occupied")
             if still_sec < still_need:
@@ -175,21 +167,7 @@ class ActivityEvaluator:
                 awake += w("IN_BED_AWAKE", "not_night")
             s["IN_BED_AWAKE"] = awake
 
-        elif bed is not None and not bed.occupied and bed.changed_at > 0.0:
-            # 침대를 떠난 직후 — WAKING.
-            # 야간에는 성립하지 않는다. 새벽에 화장실 다녀오는 것은 기상이 아니라 수면의 일부다.
-            # 전환 시각을 모르면(retained) 판정하지 않음
-            left_sec = now - bed.changed_at
-            confirm = float(self._config.value("activity", "sleep", "wake_confirm_sec", default=300))
-            factors["bed_left_sec"] = round(left_sec)
-            if left_sec <= confirm * 3 and not night:
-                waking = w("WAKING", "bed_left_recent")
-                if area == "bedroom":
-                    waking += w("WAKING", "bedroom_motion")
-                if 4 <= hour < 11:
-                    waking += w("WAKING", "morning_hours")
-                s["WAKING"] = waking
-
+       
         # ---- 식사
         if presence.areas.get("kitchen"):
             cooking = self._world.any_power_on("MEAL")
@@ -219,10 +197,10 @@ class ActivityEvaluator:
                 factors["meal_time_percentile"] = round(pct, 3)
 
             if cooking:
-                prep = w("MEAL_PREP", "cooking_on") + w("MEAL_PREP", "kitchen_present")
+                prep = w("COOKING", "cooking_on") + w("COOKING", "kitchen_present")
                 if fridge_recent:
-                    prep += w("MEAL_PREP", "fridge_recent")
-                s["MEAL_PREP"] = prep
+                    prep += w("COOKING", "fridge_recent")
+                s["COOKING"] = prep
 
             # 명세: 조리 기구 전력 종료 후 해당 구역 체류 지속이 주 신호.
             # 냉저고·정수기 접근과 mmWave 의 energy 패턴이 보조 신호.
@@ -260,24 +238,19 @@ class ActivityEvaluator:
                     watching += w("WATCHING_TV", "remote_recent")
                 s["WATCHING_TV"] = watching
 
-            resting = w("RESTING", "living_present")
+            # 소파 압력 패드. 침대와 같은 type="bed" 이고 area 로 갈린다.
+            # 패드가 없는 거실은 TV 가 꺼져 있으면 UNKNOWN.
             if sofa is not None and sofa.occupied:
-                resting += w("RESTING", "bed_occupied")
-            if not tv_on:
-                resting += w("RESTING", "tv_off")
-            s["RESTING"] = resting
-
-        # ---- 세탁
-        washer = self._washer()
-        if washer is not None:
-            cycle = washer.get("cycle")
-            running = cycle in ("WASH", "RINSE", "SPIN")
-            factors["washer_cycle"] = cycle
-            if running:
-                laundry = w("LAUNDRY", "washer_running")
-                if presence.areas.get("utility"):
-                    laundry += w("LAUNDRY", "utility_motion")
-                s["LAUNDRY"] = laundry
+                still_sec = self._world.still_sec("living")
+                still_need = float(self._config.value(
+                    "activity", "sleep", "still_for_sleep_sec", default=600
+                ))
+                factors["sofa_occupied_sec"] = round(sofa.occupied_sec(now))
+                factors["living_still_sec"] = round(still_sec)
+                awake = w("IN_SOFA_AWAKE", "bed_occupied") + w("IN_SOFA_AWAKE", "living_present")
+                if still_sec < still_need:
+                    awake += w("IN_SOFA_AWAKE", "moving")
+                s["IN_SOFA_AWAKE"] = awake
 
         return s
 
@@ -286,7 +259,7 @@ class ActivityEvaluator:
     def _pick(self, scores: dict[str, float], factors: dict[str, Any]) -> tuple[str, float]:
         """최댓값을 고르되 임계 미달이면 UNKNOWN.
 
-        confidence 는 전체 합 대비 비율이다. 후보가 15개나 되므로
+        confidence 는 전체 합 대비 비율이다. 후보가 10개나 되므로
         2등만 보는 것보다 전체 분포를 보는 쪽이 맞다.
         """
         if not scores:
@@ -380,8 +353,4 @@ class ActivityEvaluator:
 
     def _tv(self):
         devices = self._world.devices_of_type("smart_tv")
-        return devices[0] if devices else None
-
-    def _washer(self):
-        devices = self._world.devices_of_type("washer")
         return devices[0] if devices else None

@@ -113,13 +113,14 @@ def c(tmp_path):
 
 
 def sofa_still(c: Ctx, *, seq: int = 1):
-    """거실에 재실 + TV 꺼짐 → RESTING (0.30 + 0.15 > min_score 0.35).
+    """소파 패드 + 거실 재실 → IN_SOFA_AWAKE.
 
     TV 가 꺼져 있으므로 프로브는 조명으로 간다. 그래서 조명 state 도
     넣어둔다 — 없으면 프로브 자체가 안 나간다.
     """
     c.device("vd-01", "smart_tv", power="OFF")
     c.light("vd-02", brightness=100)
+    c.bed("vs-02", occupied=True)
     c.presence("vs-01", energy=3, seq=seq)
     return c
 
@@ -530,6 +531,7 @@ def test_no_channel_waits_longer(c):
     """TV 도 조명도 꺼져 있으면 떠볼 수가 없다. 긴 정지로만 확정한다."""
     c.device("vd-01", "smart_tv", power="OFF")
     c.light("vd-02", power="OFF", brightness=0)
+    c.bed("vs-02", occupied=True)
     c.presence("vs-01", energy=3)
 
     c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
@@ -544,6 +546,7 @@ def test_no_channel_confidence(c):
     """떠보지 못했으니 덜 확실하다."""
     c.device("vd-01", "smart_tv", power="OFF")
     c.light("vd-02", power="OFF", brightness=0)
+    c.bed("vs-02", occupied=True)
     c.presence("vs-01", energy=3)
     c.at(NIGHT + 1800 + 10).presence("vs-01", energy=3, seq=2)
 
@@ -633,3 +636,62 @@ def test_lights_off_on_confirm(c):
     assert c.cmds()[-1]["params"]["power"] == "OFF"
 
 
+def test_awake_areas_none_at_first(c):
+    """재시작 직후에는 직전 sleep_end 를 보지 못했다 — 모른다."""
+    c.device("vd-01", "smart_tv", power="ON")
+    c.presence("vs-01", energy=3)
+    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+
+    assert c.sleeps("sleep_start")[0].awake_areas is None
+
+
+def test_awake_areas_collects_bathroom(c):
+    """화장실에 다녀와 다시 누웠다. 배치가 같은 수면으로 이을 근거다."""
+    c.device("vd-01", "smart_tv", power="ON")
+    c.presence("vs-01", energy=3)
+    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+
+    woke = NIGHT + STILL_LIMIT + 200
+    c.at(woke).presence("vs-01", energy=50, seq=3)
+    c.at(woke + SUSTAIN + 5).presence("vs-01", energy=50, seq=4)
+
+    c.at(woke + 200).presence("vs-01", present=False, seq=5)
+    c.at(woke + 210).presence("vs-11", energy=50, seq=1)        # 화장실
+    c.at(woke + 400).presence("vs-11", present=False, seq=2)
+
+    again = woke + 600
+    c.at(again).presence("vs-01", energy=3, seq=6)
+    c.at(again + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=7)
+    c.at(again + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+
+    assert c.sleeps("sleep_start")[1].awake_areas == ("bathroom",)
+
+
+def test_awake_areas_empty_when_stayed(c):
+    """잠든 구역 밖으로 나가지 않았다.
+
+    화장실만 다녀온 것과 구별된다 — 배치가 병합 여부를 가르는 근거다.
+    """
+    c.device("vd-01", "smart_tv", power="ON")
+    c.presence("vs-01", energy=3)
+    c.at(NIGHT + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=2)
+    c.at(NIGHT + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+
+    # 깨서 뒤척이기만 하고 거실을 벗어나지 않는다
+    woke = NIGHT + STILL_LIMIT + 200
+    c.at(woke).presence("vs-01", energy=50, seq=3)
+    c.at(woke + SUSTAIN + 5).presence("vs-01", energy=50, seq=4)
+
+    again = woke + 600
+    c.at(again).presence("vs-01", energy=3, seq=5)
+    c.at(again + STILL_LIMIT + 10).presence("vs-01", energy=3, seq=6)
+    c.at(again + STILL_LIMIT + 10 + PROBE_SEC + 5)
+    c.sched.run_due()
+
+    assert c.sleeps("sleep_start")[1].awake_areas == ()

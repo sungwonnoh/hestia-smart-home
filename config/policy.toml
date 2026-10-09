@@ -157,10 +157,8 @@ fridge_recent_window_sec = 900    # 냉장고 접근을 "최근"으로 볼 창
 session_timeout_sec = 7200        # FSM 강제 종료 (2시간)
 
 [activity.sleep]
-tv_idle_for_sleep_sec = 7200      # TV 무조작 2시간 — 수면 판단의 핵심 신호
 bed_confirm_sec = 600             # 압력 패드 점유 지속
 still_for_sleep_sec = 600         # energy 바닥이 이만큼 지속돼야 SLEEPING
-wake_confirm_sec = 300            # 이탈 후 이만큼 활동하면 기상 확정
 night_start_hour = 21             # 야간으로 보는 시간대
 night_end_hour = 7
 
@@ -168,23 +166,17 @@ night_end_hour = 7
 # IN_BED_AWAKE 를 기본으로 두고 확신이 쌓일 때 SLEEPING 으로 간다 —
 # 깨어 있는 사람의 조명을 끄는 쪽이 실수 비용이 크다.
 
-[activity.weights.SLEEPING]
-bed_occupied = 0.35
-still_sustained = 0.30
-tv_idle = 0.15
-night_hours = 0.20
-
 [activity.weights.IN_BED_AWAKE]
 bed_occupied = 0.40
 moving = 0.25
 not_night = 0.15
 
-[activity.weights.WAKING]
-bed_left_recent = 0.45
-bedroom_motion = 0.20
-morning_hours = 0.15
+[activity.weights.IN_SOFA_AWAKE]
+bed_occupied = 0.35
+living_present = 0.25
+moving = 0.15
 
-[activity.weights.MEAL_PREP]
+[activity.weights.COOKING]
 cooking_on = 0.60
 kitchen_present = 0.25
 fridge_recent = 0.10
@@ -206,14 +198,6 @@ tv_on = 0.45
 living_present = 0.25
 remote_recent = 0.15
 
-[activity.weights.RESTING]
-living_present = 0.30
-bed_occupied = 0.25
-tv_off = 0.15
-
-[activity.weights.LAUNDRY]
-washer_running = 0.50
-utility_motion = 0.25
 
 # 개인 분포를 activity 점수에 반영하는 가중치.
 #
@@ -230,26 +214,18 @@ min_predictability = 0.12
 # activity 는 기억이 없다 — 매 순간 센서를 보고 다시 계산한다.
 # FSM 은 "09:20 에 시작된 것이 지금도 진행 중"을 기억하고 t0 를 보관한다.
 #
-# t0 는 활동 묶음의 시작이다. MEAL_PREP -> EATING 전이에도 유지된다.
+# t0 는 활동 묶음의 시작이다. COOKING -> EATING 전이에도 유지된다.
 # KDE 가 학습하는 것은 '식사를 시작한 시각'이고 그것은 조리를 시작한 때다.
 
 [fsm.meal]
-open_states = ["MEAL_PREP", "EATING"]   # KITCHEN_MISC 는 열지 않는다 (물 마시러 들른 것)
+open_states = ["COOKING", "EATING"]   # KITCHEN_MISC 는 열지 않는다 (물 마시러 들른 것)
 close_grace_sec = 600                   # 묶음 상태를 벗어난 뒤 이만큼 지나면 닫는다
 min_duration_sec = 120                  # 이보다 짧으면 기록하지 않는다
 session_timeout_sec = 7200              # 강제 종료 (2시간)
 cooking_lookback_sec = 7200
 
 [fsm.wake]
-# activity 는 '지금'이고 wake 는 '오늘 하루의 누적'이다. 시간 스케일이 달라
-# 별도로 유지한다. 다음 기상 확정 시 리셋한다.
-sleep_confirm_sec = 600                 # SLEEPING 이 이만큼 지속돼야 ASLEEP 확정
-wake_confirm_sec = 300                  # 기상 후 이만큼 활동하면 AWAKE 확정
-hydration_window_sec = 7200             # 기상 후 이 안의 급수를 루틴으로 본다
-meal_window_sec = 10800                 # 기상 후 이 안의 식사를 루틴으로 본다
-# 기상으로 인정하는 시간대. 새벽 화장실과 아침 기상은 센서 신호가 같다.
-earliest_hour = 4
-latest_hour = 12
+
 
 # ============================================================ 이상 판정
 #
@@ -286,7 +262,7 @@ expiry_sec = 3600                 # 이 시각이 지나면 보내지 않는다 
 max_escalation = 2                # 명세: 최대 2단계. SAFETY 만 예외
 affinity = ["smart_tv", "smart_fridge", "display_node"]   # default 에도 필요 — 시나리오가 생략할 수 있음
 
-[notify.WAKE_ROUTINE]
+[notify.HYDRATION_PROMPT]
 affinity = ["smart_fridge", "smart_tv", "display_node"]
 comply_window_min = 30
 title = "수분 섭취"
@@ -382,7 +358,7 @@ recheck_sec = 300
 
 
 [scenarios.sleep]
-states = ["RESTING", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"] # 수정 필요🚨
+states = ["IN_SOFA_AWAKE", "WATCHING_TV", "IN_BED_AWAKE", "SLEEPING"]
 
 # 프로브 발동
 probe_still_sec = 900              # 정지 15분이면 떠본다
@@ -400,6 +376,33 @@ end_sustain_sec = 15               # moving_since 가 이만큼 지속돼야 sle
 probe_dim_levels = [0.7, 0.3]      # 프로브 시작 시점 밝기 대비
 probe_transition_ms = 30000
 restore_brightness = 100           # 소등 감지 시 되돌릴 밝기
+
+
+[scenarios.hydration]
+# 간격 — gap_from 이 sleep_end 면 sleep_end_gap_sec, 아니면 gap_sec
+gap_sec = 14400                 # 4시간 — 마지막 급수부터
+short_gap_sec = 10800           # 덥거나 건조하면 3시간
+sleep_end_gap_sec = 7200        # 2시간 — 깬 뒤부터. 낮잠도 포함
+renotify_sec = 7200             # 알림 뒤 2시간
+max_repeat = 2                  # 안 마셔도 보내는 최대 횟수
+
+# 환경 — 둘 다면 HEAT 우선, 합쳐 하루 1회
+hot_temp_c = 28
+hot_exit_c = 26
+dry_humidity_pct = 35
+dry_exit_pct = 40
+
+# 일일 권장량 — 정수기 물만 센다
+daily_target_ml = 1500
+checkpoint_hour = 20            # 외출 중이면 그날은 건너뜀
+
+# 귀가
+return_min_away_sec = 7200      # 2시간 넘게 나갔다 와야
+return_delay_sec = 600          # 귀가 10분 뒤
+
+# 중단
+pause_start = "22:00"
+pause_end = "06:00"
 
 
 # ============================================================ 안전
