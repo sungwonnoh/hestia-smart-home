@@ -5,6 +5,7 @@ import '../models/context_state.dart';
 import '../models/device.dart';
 import '../models/explanation.dart';
 import '../models/home_setup.dart';
+import '../models/medication.dart';
 import '../models/notification_item.dart';
 import '../models/room.dart';
 import '../models/user_preferences.dart';
@@ -42,6 +43,8 @@ class MockHestiaRepository implements HestiaRepository, DemoControls {
   UserPreferences _preferences = const UserPreferences();
   List<Device> _devices = const [];
   late List<HestiaNotification> _notifications;
+  List<Medication> _medications = const [];
+  int _medicationSeq = 0;
   bool _offline = false;
   int _demoCursor = 0;
 
@@ -233,7 +236,60 @@ class MockHestiaRepository implements HestiaRepository, DemoControls {
     _setup = null;
     _devices = const [];
     _preferences = const UserPreferences();
+    _medications = const [];
     _notifications = _seedNotifications(_clock());
+  }
+
+  // ---------------------------------------------------------------- medication
+
+  @override
+  Future<List<Medication>> getMedications() async {
+    await _respond();
+    return List.unmodifiable(_medications);
+  }
+
+  @override
+  Future<Medication> addMedication(Medication medication) async {
+    await _respond();
+    final saved = _withPeriod('med-mock-${++_medicationSeq}', medication, null);
+    _medications = [..._medications, saved];
+    return saved;
+  }
+
+  @override
+  Future<Medication> updateMedication(Medication medication) async {
+    await _respond();
+    final index = _medications.indexWhere((m) => m.id == medication.id);
+    if (index < 0) {
+      throw HestiaException('복약 일정을 찾을 수 없습니다: ${medication.id}');
+    }
+    final saved =
+        _withPeriod(medication.id, medication, _medications[index].startDate);
+    _medications = [..._medications]..[index] = saved;
+    return saved;
+  }
+
+  @override
+  Future<void> deleteMedication(String medicationId) async {
+    await _respond();
+    _medications = _medications.where((m) => m.id != medicationId).toList();
+  }
+
+  /// 서버처럼 시작일(없으면 오늘)과 마지막 복용일을 채운다.
+  Medication _withPeriod(String id, Medication m, DateTime? currentStart) {
+    final now = _clock();
+    final start =
+        m.startDate ?? currentStart ?? DateTime(now.year, now.month, now.day);
+    return Medication(
+      id: id,
+      name: m.name.trim(),
+      slots: [for (final s in DoseSlot.values) if (m.slots.contains(s)) s],
+      mealTiming: m.needsMealTiming ? m.mealTiming : null,
+      days: m.days,
+      startDate: start,
+      endDate: DateTime(start.year, start.month, start.day + m.days - 1),
+      refillRequired: m.refillRequired,
+    );
   }
 
   void dispose() => _notificationController.close();
