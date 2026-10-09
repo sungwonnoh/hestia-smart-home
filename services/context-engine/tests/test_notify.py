@@ -49,7 +49,7 @@ class Ctx:
         self.notifier = Notifier(
             self.clock, self.config, self.world, self.sched,
             publish=lambda t, p, r: self.pub.publish(t, p, retain=r),
-            wake_fsm=self.wake,
+            day_fsm=self.wake,
         )
 
     def at(self, ts: float):
@@ -84,9 +84,9 @@ class Ctx:
     def send(self, scenario: str = "WAKE_ROUTINE", **kw):
         kw.setdefault("title", "제목")
         kw.setdefault("text", "본문")
-        # comply_kind 를 준 테스트는 wake 판정을 기대한다
+        # comply_kind 를 준 테스트는 done 판정을 기대한다
         if kw.get("comply_kind") and "comply_check" not in kw:
-            kw["comply_check"] = "wake"
+            kw["comply_check"] = "done"
         return self.notifier.send(scenario=scenario, **kw)
 
     def topics(self) -> list[str]:

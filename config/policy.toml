@@ -241,15 +241,7 @@ session_timeout_sec = 7200              # 강제 종료 (2시간)
 cooking_lookback_sec = 7200
 
 [fsm.wake]
-# activity 는 '지금'이고 wake 는 '오늘 하루의 누적'이다. 시간 스케일이 달라
-# 별도로 유지한다. 다음 기상 확정 시 리셋한다.
-sleep_confirm_sec = 600                 # SLEEPING 이 이만큼 지속돼야 ASLEEP 확정
-wake_confirm_sec = 300                  # 기상 후 이만큼 활동하면 AWAKE 확정
-hydration_window_sec = 7200             # 기상 후 이 안의 급수를 루틴으로 본다
-meal_window_sec = 10800                 # 기상 후 이 안의 식사를 루틴으로 본다
-# 기상으로 인정하는 시간대. 새벽 화장실과 아침 기상은 센서 신호가 같다.
-earliest_hour = 4
-latest_hour = 12
+
 
 # ============================================================ 이상 판정
 #

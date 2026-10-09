@@ -511,7 +511,7 @@ def test_timer_change_reaches_callback(tmp_path):
 def test_recompute_returns_only_changed(c):
     changed = c.presence("vs-03", True)
     names = {ctx.name for ctx in changed}
-    assert names == {"presence", "away", "occupancy", "activity", "suppression"}
+    assert names == {"presence", "away", "occupancy", "activity", "suppression", "day"}
 
 
 def test_second_recompute_is_empty(c):

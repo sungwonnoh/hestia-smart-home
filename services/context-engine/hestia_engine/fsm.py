@@ -1,12 +1,12 @@
 """활동 묶음 추적.
 
-activity 는 기억이 없다. 매 순간 센서를 보고 12종 점수를 다시 계산할 뿐,
-09:20 의 MEAL_PREP 과 09:38 의 EATING 이 같은 식사인지 모른다.
+activity 는 기억이 없다. 매 순간 센서를 보고 10종 점수를 다시 계산할 뿐,
+09:20 의 COOKING 과 09:38 의 EATING 이 같은 식사인지 모른다.
 
 FSM 이 그 '묶음'이라는 개념을 들고 있는 유일한 곳이다.
 그리고 묶음의 시작 시각 — t0 — 이 KDE 학습의 입력이다.
 
-명세: t0 는 활동 묶음의 시작 시각. MEAL_PREP -> EATING 전이 시에도 유지되어
+명세: t0 는 활동 묶음의 시작 시각. COOKING -> EATING 전이 시에도 유지되어
 KDE 에 일관된 값을 제공한다.
 
 방향은 한쪽이다. FSM 은 activity 를 읽기만 하고 t0 를 돌려준다.
@@ -19,7 +19,7 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from .clock import Clock
 from .config import Config
@@ -38,7 +38,7 @@ class T0Entry:
     """활동 묶음 한 건. KDE 학습의 원재료."""
 
     date: str              # YYYY-MM-DD (KST)
-    type: str              # meal / wake / hydration / sleep_start / sleep_end
+    type: str              # meal / hydration / sleep_start / sleep_end
     t0: float              # 묶음 시작 시각 (epoch)
     source: str            # sensor / diary / aruba
     prompted: bool         # 시스템 유도로 일어난 행동인가
@@ -133,7 +133,7 @@ class MealSession:
 class MealFSM:
     """식사 묶음을 열고 닫으며 t0 를 보관한다.
 
-        IDLE ──MEAL_PREP/EATING 진입──→ ACTIVE ──이탈·타임아웃──→ IDLE
+        IDLE ──COOKING/EATING 진입──→ ACTIVE ──이탈·타임아웃──→ IDLE
                                           ↑
                                      t0 고정
     """
@@ -151,6 +151,7 @@ class MealFSM:
         self._log = t0log
         self.session: MealSession | None = None
         self._timed_out = False        # 타임아웃 후 재개 차단
+        self.on_close: Callable[[float], None] | None = None
 
     @property
     def t0(self) -> float | None:
@@ -161,12 +162,12 @@ class MealFSM:
 
         in_meal_area 는 '주방에 아직 있는가'다. 조리가 끝나고 EATING 판정이
         서기 전 구간은 KITCHEN_MISC 인데, 그것으로 묶음을 끊으면
-        MEAL_PREP -> EATING 사이에서 t0 가 리셋된다.
+        COOKING -> EATING 사이에서 t0 가 리셋된다.
         """
         now = self._clock.now()
         timers: list[tuple[str, float]] = []
         open_states = tuple(
-            self._config.value("fsm", "meal", "open_states", default=["MEAL_PREP", "EATING"])
+            self._config.value("fsm", "meal", "open_states", default=["COOKING", "EATING"])
         )
 
         if state in open_states:
@@ -239,6 +240,7 @@ class MealFSM:
         
         self.session = MealSession(t0=t0, opened_state=state, last_active_at=now)
         log.debug("식사 묶음 시작 t0=%s (%s)", t0, state)
+        return True
 
     def _close(self, now: float, *, use_now: bool = False) -> None:
         s = self.session
@@ -267,10 +269,13 @@ class MealFSM:
             )
         log.debug("식사 묶음 종료 t0=%s duration=%.0f", s.t0, duration)
 
+        if self.on_close is not None:
+            self.on_close(s.t0)
+
     def _evidence_t0(self, state: str, now: float) -> float | None:
         """근거가 생긴 시각을 t0 로 쓴다. 상태가 바뀐 시각이 아니다.(찾지 못하면 None-retained)
 
-        인덕션을 켠 것은 09:20:00 이고 MEAL_PREP 판정은 그 뒤다.
+        인덕션을 켠 것은 09:20:00 이고 COOKING 판정은 그 뒤다.
         판정 시각을 쓰면 t0 가 밀리고 KDE 분포가 통째로 틀어진다.
         """
         lookback = float(
@@ -303,67 +308,48 @@ class MealFSM:
         """
         return self._world.any_power_on("MEAL")
 
-# ==================================================================== wake FSM
-
+# ==================================================================== day FSM
 
 @dataclass(frozen=True, slots=True)
-class WakeState(Context):
-    """명세의 context/wake.
+class DayState(Context):
+    """명세의 context/day.
 
-    activity 는 '지금'의 상태, wake 는 '오늘 하루'의 누적이다.
+    activity 는 '지금'의 상태, day 는 '오늘 하루'의 누적이다.
     시간 스케일이 달라 별도로 유지한다.
 
-    추론이 아니라 플래그 집합이므로 confidence·factors 를 쓰지 않는다 (명세).
+    기록이지 추론이 아니므로 confidence·factors 를 쓰지 않는다.
     Context 를 상속하는 것은 발행 경로를 하나로 두기 위해서다.
-
-    _prompted 는 되먹임 억제용 — 유도된 행동이 개인 분포를 오염시키지 않도록
-    분리 기록한다.
     """
 
-    state: str = "ASLEEP"              # ASLEEP / AWAKE
-    wake_t0: float | None = None       # 침대를 떠난 시각. KDE 기상 분포의 입력
-    hydration_done: bool = False
-    hydration_prompted: bool = False
-    hydration_at: float | None = None
-    meal_done: bool = False
-    meal_prompted: bool = False
-    meal_at: float | None = None
-    medication_done: bool = False
-    medication_prompted: bool = False
-    medication_at: float | None = None
-    #_at은 발행하지 않음, 알림 층이 메모리에서 읽는 값
+    date: str = ""
+    meals: tuple[float, ...] = ()
+    hydrations: tuple[float, ...] = ()
+    medications: tuple[float, ...] = ()
 
     def payload(self, now: float) -> dict[str, Any]:
         return {
-            "state": self.state,
-            "wake_t0": self.wake_t0,
-            "hydration_done": self.hydration_done,
-            "hydration_prompted": self.hydration_prompted,
-            "meal_done": self.meal_done,
-            "meal_prompted": self.meal_prompted,
-            "medication_done": self.medication_done,
-            "medication_prompted": self.medication_prompted,
+            "date": self.date,
+            "meals": list(self.meals),
+            "hydrations": list(self.hydrations),
+            "medications": list(self.medications),
         }
 
     def same_as(self, other: Context | None) -> bool:
-        if not isinstance(other, WakeState):
+        if not isinstance(other, DayState):
             return False
         return (
-            self.state == other.state
-            and self.hydration_done == other.hydration_done
-            and self.meal_done == other.meal_done
-            and self.medication_done == other.medication_done
+            self.date == other.date
+            and self.meals == other.meals
+            and self.hydrations == other.hydrations
+            and self.medications == other.medications
         )
 
 
-class WakeFSM:
-    """하루의 기상 루틴을 추적한다.
+class DayFSM:
+    """오늘 무엇을 했는지 기록한다.
 
-        ASLEEP ──SLEEPING 지속 후 이탈──→ AWAKE ──다음 수면──→ ASLEEP
-                                            ↑
-                                       wake_t0 고정
-
-    추론이 아니라 플래그 집합이므로 confidence·factors 가 없다 (명세).
+    기상 판정을 하지 않는다 — 무엇이 기상인가는 배치가 사후에 정한다.
+    날짜가 바뀌면 목록을 비운다.
     """
 
     def __init__(
@@ -377,195 +363,96 @@ class WakeFSM:
         self._config = config
         self._world = world
         self._log = t0log
-        self.state = WakeState(name="wake", since=clock.now())
-        self._sleep_since: float | None = None
-        self._logged_wake_date: str | None = None
+        now = clock.now()
+        self.state = DayState(name="day", since=now, date=day_key(now))
 
-    def update(self, activity_state: str, activity_since: float) -> list[tuple[str, float]]:
-        now = self._clock.now()
-        timers: list[tuple[str, float]] = []
-
-        sleep_need = float(self._config.value("fsm", "wake", "sleep_confirm_sec", default=600))
-        wake_need = float(self._config.value("fsm", "wake", "wake_confirm_sec", default=300))
-
-        if activity_state == "SLEEPING":
-            if self._sleep_since is None:
-                self._sleep_since = activity_since
-            if now - self._sleep_since >= sleep_need and self.state.state == "AWAKE":
-                # 다음 기상을 위해 리셋한다 (명세: 리셋은 다음 기상 확정 시)
-                self.state = WakeState(name="wake", since=now)
-                self._logged_wake_date = None
-            else:
-                timers.append(("wake-sleep", self._sleep_since + sleep_need))
-            return timers
-
-        self._sleep_since = None
-
-        # 기상 — 침대를 떠나 명확한 활동이 보이면 확정.
-        # 단 야간은 제외한다. 새벽 화장실이 기상으로 잡히면
-        # wake_t0 가 새벽으로 찍히고 KDE 기상 분포가 통째로 오염된다.
-        if self.state.state == "ASLEEP" and self._is_wake_hour():
-            left_at, has_bed = self._bed_left_at()
-            if has_bed and left_at is None:
-                # 침대 센서가 있는데 이탈 시각을 모른다 — retained 다.
-                # 실시간 전환이 올 때까지 기다린다.
-                return timers
-
-            t0 = left_at if left_at is not None else activity_since
-
-            if activity_state in ("BATHROOM", "MEAL_PREP", "EATING", "KITCHEN_MISC",
-                                  "WATCHING_TV", "RESTING", "LAUNDRY"):
-                self._confirm_wake(t0)
-            elif activity_state == "WAKING":
-                if now - activity_since >= wake_need:
-                    self._confirm_wake(t0)
-                else:
-                    timers.append(("wake-confirm", activity_since + wake_need))
-
-        return timers
+    def tick(self) -> list[tuple[str, float]]:
+        """날짜 전환만 본다. 타이머는 없다."""
+        self._roll_day(self._clock.now())
+        return []
 
     def restore(self) -> None:
-        """기동 시 오늘의 t0 기록으로 루틴 플래그를 되살린다. """
+        """기동 시 오늘 기록을 되살린다. 날짜 기준이다."""
         if self._log is None:
             return
-
         today = day_key(self._clock.now())
-        entries = {e.type: e for e in self._log.of_date(today)}
 
-        wake = entries.get("wake")
-        if wake is None:
-            return                       # 아직 기상 기록이 없다
+        buckets: dict[str, list[float]] = {
+            "meals": [], "hydrations": [], "medications": [],
+        }
+        for e in self._log.of_date(today):
+            key = f"{e.type}s"
+            if key in buckets:
+                buckets[key].append(e.t0)
 
-        self.state = WakeState(
-            name="wake",
-            since=wake.t0,
-            state="AWAKE",
-            wake_t0=wake.t0,
-            hydration_done="hydration" in entries,
-            hydration_at=entries["hydration"].t0 if "hydration" in entries else None,
-            meal_done="meal" in entries,
-            meal_at=entries["meal"].t0 if "meal" in entries else None,
+        self.state = DayState(
+            name="day", since=self._clock.now(), date=today,
+            meals=tuple(sorted(buckets["meals"])),
+            hydrations=tuple(sorted(buckets["hydrations"])),
+            medications=tuple(sorted(buckets["medications"])),
         )
-        self._logged_wake_date = today
         log.info(
-            "기상 루틴 복원: wake_t0=%s hydration=%s meal=%s",
-            wake.t0, self.state.hydration_done, self.state.meal_done,
+            "오늘 기록 복원: meals=%d hydrations=%d medications=%d",
+            len(self.state.meals), len(self.state.hydrations),
+            len(self.state.medications),
         )
 
     def note_hydration(self, prompted: bool = False) -> None:
-        """정수기 급수 이벤트. 기상 후 창 안이면 루틴으로 기록한다."""
-        if self.state.state != "AWAKE" or self.state.hydration_done:
-            return
-        if not self._within("hydration_window_sec"):
-            return
-        now = self._clock.now()
-        self.state = _replace(
-            self.state, 
-            hydration_done=True, hydration_prompted=prompted, hydration_at=now,
-            )
-        self._log_entry("hydration", prompted)
+        """정수기 급수."""
+        self._append("hydrations", "hydration", prompted)
 
-    def note_meal(self, prompted: bool = False) -> None:
-        if self.state.state != "AWAKE" or self.state.meal_done:
-            return
-        if not self._within("meal_window_sec"):
-            return
-        self.state = _replace(
-            self.state, 
-            meal_done=True, meal_prompted=prompted, meal_at=self._clock.now(),
-            )
+    def note_meal(self, t0: float) -> None:
+        """MealFSM 이 묶음을 닫을 때 호출.
+           t0 로그는 MealFSM 이 발행한다.
+        """
+        self._roll_day(self._clock.now())
+        if day_key(t0) != self.state.date:
+            return                       # 자정을 넘긴 묶음 — 어제 것이다
+        self.state = _replace(self.state, meals=(*self.state.meals, t0))
 
     def note_medication(self, prompted: bool = False) -> None:
         """복약은 이벤트로 판정할 수 없다 — ack 로만 확인한다 (명세)."""
-        if self.state.state != "AWAKE" or self.state.medication_done:
-            return
-        self.state = _replace(
-            self.state, 
-            medication_done=True, medication_prompted=prompted, medication_at=self._clock.now(),
-            )
+        self._append("medications", "medication", prompted)
+
+    def done_at(self, kind: str) -> float | None:
+        """그 행동을 마지막으로 한 시각. 알림 층의 comply 판정에 쓴다."""
+        times = getattr(self.state, f"{kind}s", ())
+        return times[-1] if times else None
 
     # ------------------------------------------------------------ 내부
 
-    def done_at(self, kind: str) -> float | None:
-        """그 루틴을 마친 시각. 알림 층의 comply 판정에 쓴다.
+    def _roll_day(self, now: float) -> None:
+        """날짜가 바뀌면 오늘 기록을 비운다.
 
-        _done 플래그만으로는 셋을 구별할 수 없다 — 알림 전에 이미 했는지, 언제 했는지(delay_sec), 리셋으로 false 가 됐는지.
+        기상 확정에 묶으면 '무엇이 기상인가' 를 실시간으로 판정해야
+        하는데, 그 판단은 배치가 사후에 하기로 했다.
         """
-        return getattr(self.state, f"{kind}_at", None)
+        today = day_key(now)
+        if self.state.date != today:
+            self.state = DayState(name="day", since=now, date=today)
+            log.debug("날짜 전환 — 오늘 기록 초기화 %s", today)
 
-    def _is_wake_hour(self) -> bool:
-        """기상으로 인정하는 시간대.
-
-        명세에 없지만 필요하다 — 새벽 화장실과 아침 기상은
-        센서 신호가 같고 시각으로만 갈린다.
-        """
-        from datetime import datetime
-
-        from .timeutil import KST
-
-        hour = datetime.fromtimestamp(self._clock.now(), KST).hour
-        start = int(self._config.value("fsm", "wake", "earliest_hour", default=4))
-        end = int(self._config.value("fsm", "wake", "latest_hour", default=12))
-        return start <= hour < end
-
-    def _bed_left_at(self) -> float | tuple[float | None, bool]:
-        """침대를 떠난 시각, 침대 센서가 있는가
-           센서가 없는 집과 retained 라 시각을 모르는 경우를 구별한다.
-
-           wake_t0 는 기상 확정 시각이 아니라 침대를 떠난 시각이다 — KDE 기상 분포의 입력이므로 판정 지연이 섞이면 안 된다.
-        """
-        from .world import BedState
-
-        found = False
-        for st in self._world.sensors_by_role("SLEEP"):
-            if not isinstance(st, BedState):
-                continue
-            found = True
-            if not st.occupied and st.changed_at > 0.0:
-                return st.changed_at, True
-        return None, found
-
-    def _confirm_wake(self, wake_t0: float) -> None:
-        """wake_t0 는 기상 확정 시각이 아니라 침대를 떠난 시각이다."""
-        self.state = WakeState(name="wake", since=wake_t0, state="AWAKE", wake_t0=wake_t0)
-        date = day_key(wake_t0)
-        if self._log is not None and self._logged_wake_date != date:
-            self._logged_wake_date = date
-            self._log.write(
-                T0Entry(
-                    date=date,
-                    type="wake",
-                    t0=wake_t0,
-                    source="sensor",
-                    prompted=False,
-                    duration_sec=0.0,
-                )
-            )
-        log.debug("기상 확정 wake_t0=%s", wake_t0)
-
-    def _within(self, key: str) -> bool:
-        window = float(self._config.value("fsm", "wake", key, default=7200))
-        if self.state.wake_t0 is None:
-            return False
-        return self._clock.now() - self.state.wake_t0 <= window
+    def _append(self, field: str, type_: str, prompted: bool) -> None:
+        now = self._clock.now()
+        self._roll_day(now)
+        self.state = _replace(
+            self.state, **{field: (*getattr(self.state, field), now)}
+        )
+        self._log_entry(type_, prompted)
 
     def _log_entry(self, type_: str, prompted: bool) -> None:
-        if self._log is None or self.state.wake_t0 is None:
+        if self._log is None:
             return
         now = self._clock.now()
         self._log.write(
             T0Entry(
-                date=day_key(now),
-                type=type_,
-                t0=now,
-                source="sensor",
-                prompted=prompted,
-                duration_sec=now - self.state.wake_t0,   # hydration_lag
+                date=day_key(now), type=type_, t0=now,
+                source="sensor", prompted=prompted, duration_sec=0.0,
             )
         )
 
 
-def _replace(state: WakeState, **changes: Any) -> WakeState:
+def _replace(state: DayState, **changes: Any) -> DayState:
     from dataclasses import replace
 
     return replace(state, **changes)

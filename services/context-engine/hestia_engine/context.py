@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 class Context:
     """hestia/context/{name} 으로 발행되는 판단 결과."""
 
-    name: str       #activity / presence / wake / away / occupancy / suppression
+    name: str       #activity / presence / day / away / occupancy / suppression
     since: float    #해당 상태가 시작된 시각
     confidence: float = 1.0     #신뢰도(이 판단을 얼마나 믿을 수 있는가, 0~1)
     factors: dict[str, Any] = field(default_factory=dict)       #confidence 산출에 기여한 근거값
@@ -762,7 +762,7 @@ class SuppressionEvaluator:
 
 
 class ContextEngine:
-    """다섯 context 를 계산하고 바뀐 것만 돌려준다.
+    """여섯 context 를 계산하고 바뀐 것만 돌려준다.
 
     recompute() 는 순수하다 — 계산과 타이머 예약만 하고 발행하지 않는다.
     그래서 몇 번 불려도 안전하고, 두 번째 호출은 빈 튜플을 돌려준다.
@@ -788,7 +788,7 @@ class ContextEngine:
         models: Any | None = None,
     ) -> None:
         from .activity import ActivityContext, ActivityEvaluator   # 순환 import 회피
-        from .fsm import MealFSM, WakeFSM
+        from .fsm import MealFSM, DayFSM
 
         self._clock = clock
         self._sched = scheduler
@@ -800,13 +800,15 @@ class ContextEngine:
         self._suppression_eval = SuppressionEvaluator(clock, config)
 
         self.meal_fsm = MealFSM(clock, config, world, t0log)
-        self.wake_fsm = WakeFSM(clock, config, world, t0log)
+        self.day_fsm = DayFSM(clock, config, world, t0log)
+        self.meal_fsm.on_close = self.day_fsm.note_meal
 
         self.presence: PresenceContext | None = None
         self.away: AwayContext | None = None
         self.occupancy: OccupancyContext | None = None
         self.activity: ActivityContext | None = None
         self.suppression: SuppressionContext | None = None
+        self._day_prev: Any | None = None
 
 
     def recompute(self) -> tuple[Context, ...]:
@@ -841,9 +843,10 @@ class ContextEngine:
         timers += self.meal_fsm.update(
             activity.state, in_meal_area=bool(presence.areas.get("kitchen"))
         )
-        timers += self.wake_fsm.update(activity.state, activity.since)
-        if activity.state == "EATING":
-            self.wake_fsm.note_meal()
+        timers += self.day_fsm.tick()
+        if not self.day_fsm.state.same_as(self._day_prev):
+            changed.append(self.day_fsm.state)
+        self._day_prev = self.day_fsm.state
 
         if self.meal_fsm.t0 is not None and activity.state in ("MEAL_PREP", "EATING", "KITCHEN_MISC"):
             activity = replace(activity, t0=self.meal_fsm.t0)
@@ -875,15 +878,13 @@ class ContextEngine:
         )
 
     def note_event(self, msg: Any) -> None:
-        """가전 이벤트를 wake 루틴에 반영한다.
-
-        Engine(2-12)이 ingest 에서 호출한다. 정수기 급수와 식사 전이가
-        기상 루틴의 _done 플래그를 채운다.
+        """가전 이벤트를 오늘 기록에 반영한다.
+           Engine 이 ingest 에서 호출한다.
         """
         from . import messages as m
 
         if isinstance(msg, m.DispensedEvent):
-            self.wake_fsm.note_hydration()
+            self.day_fsm.note_hydration()
 
     def allows(self, scenario: str) -> bool:
         """이 시나리오의 알림을 지금 보내도 되는가.

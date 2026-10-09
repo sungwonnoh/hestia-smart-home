@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from hestia_engine.fsm import WakeState
 from hestia_engine.replay import replay_file
 
 DATA = Path(__file__).parent / "data"
@@ -130,19 +129,6 @@ def test_away_occupancy_unknown():
 def test_night_reaches_sleeping():
     seq = states(play("night.jsonl")[2], "activity")
     assert "SLEEPING" in seq
-
-
-def test_night_bathroom_is_not_waking():
-    """수면 중 화장실은 기상이 아니다.
-
-    여기서 AWAKE 로 넘어가면 wake_t0 가 새벽으로 찍히고
-    KDE 기상 분포가 통째로 오염된다.
-    """
-    _, engine, pub, _ = play("night.jsonl")
-    wake = [p for p in pub.of_topic("hestia/context/wake")]
-    assert all(p["state"] == "ASLEEP" for p in wake)
-    assert engine.context.wake_fsm.state.wake_t0 is None
-
 
 def test_night_returns_to_sleeping():
     _, engine, _, _ = play("night.jsonl")

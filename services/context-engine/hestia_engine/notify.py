@@ -9,8 +9,9 @@
 
 한 건이 수십 분에 걸쳐 상태를 바꾼다. 지금까지 만든 것 중 가장 오래 사는 객체이고, 그래서 PendingNotify 를 따로 두고 타이머로 깨운다.
 
-comply 판정은 이벤트를 직접 보지 않고 wake FSM 의 _at 시각을 읽는다. (FSM 이 이미 그 판정을 하고 있으므로 중복을 피한다.) 
-발송 시점의 _at 을 baseline 으로 기억해 둔다.
+comply 판정은 이벤트를 직접 보지 않고 Day FSM 이 기록한 마지막 시각을 읽는다.
+(FSM 이 이미 그 판정을 하고 있으므로 중복을 피한다.)
+발송 시점의 값을 baseline 으로 기억해 둔다.
 """
 
 from __future__ import annotations
@@ -69,11 +70,11 @@ class PendingNotify:
     decision_id: str | None = None           # 어느 판정에서 나온 알림인지 (판정 id)
     confidence: float = 0.0                  # 해당 판정의 확신도. outcome에 포함
     comply_kind: str | None = None           # hydration / meal / medication
-    comply_check: str | None = None          # wake / movement. 판정 근거의 종류
+    comply_check: str | None = None          # done / movement. 판정 근거의 종류
     comply_area: str | None = None           # movement 판정 대상 구역
     area: str | None = None                  # 알림이 겨냥한 구역 = 사용자 위치
     proxy_for: str | None = None             # 대행 중이면 원래 기기 종류
-    baseline_at: float | None = None         # 발송 시점의 _at. 이보다 뒤여야 comply
+    baseline_at: float | None = None         # 발송 시점의 마지막 기록 시각. 이보다 뒤여야 comply
     closed_at: float | None = None           # 알림이 닫힌 시각. None이면 진행 중
     closed_reason: str | None = None         # SEEN / TIMEOUT / EXPIRED / CANCELLED
 
@@ -330,7 +331,7 @@ class Notifier:
         world: WorldState,
         scheduler: Scheduler,
         publish: Callable[[str, dict[str, Any], bool], None],
-        wake_fsm: Any | None = None,
+        day_fsm: Any | None = None,
         note_sent: Callable[[str], None] | None = None,
     ) -> None:
         self._clock = clock
@@ -338,7 +339,7 @@ class Notifier:
         self._world = world
         self._sched = scheduler
         self._publish = publish
-        self._wake = wake_fsm
+        self._day = day_fsm
         self._note_sent = note_sent
 
         self.store = NotifyStore()
@@ -621,19 +622,19 @@ class Notifier:
            시나리오마다 판정 근거가 다르다. - 근거의 종류를 발송 시점에 받아 여기서 분기
         """
         match n.comply_check:
-            case "wake":
-                return self._comply_wake(n)
+            case "done":
+                return self._comply_done(n)
             case "movement":
                 return self._comply_movement(n)
             case _:
                 return False, None, None
             
 
-    def _comply_wake(self, n: PendingNotify) -> tuple[bool, str | None, float | None]:
-        """FSM 의 _at 시각을 읽는다.
+    def _comply_done(self, n: PendingNotify) -> tuple[bool, str | None, float | None]:
+        """Day FSM 이 기록한 마지막 시각을 읽는다.
            발송 시점의 값(baseline_at)보다 뒤여야 이 알림 덕분이다 — 09:00 에 이미 물을 마셨는데 09:30 알림의 성과로 기록하면 L3 가 엉뚱한 채널을 학습한다.
         """
-        if n.comply_kind is None or self._wake is None:
+        if n.comply_kind is None or self._day is None:
             return False, None, None
 
         done_at = self._done_at(n.comply_kind)
@@ -673,9 +674,9 @@ class Notifier:
     
 
     def _done_at(self, kind: str | None) -> float | None:
-        if kind is None or self._wake is None:
+        if kind is None or self._day is None:
             return None
-        return self._wake.done_at(kind)
+        return self._day.done_at(kind)
 
     # ------------------------------------------------------------ 내부
 

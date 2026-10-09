@@ -535,58 +535,8 @@ class ScenarioRunner:
     # ------------------------------------------------------------ WAKE_ROUTINE
 
     def _wake_routine(self, context: Any) -> list[tuple[str, float]]:
-        """기상 후 수분 섭취.
-
-        시나리오 4. 기상하고 평소보다 오래 물을 마시지 않으면 권한다. hydration_lag 분포를 쓰는 것이 핵심이다 — "몇 시에" 가 아니라 "기상하고 몇 분 만에" 가 이 사람의 패턴이다.
-        """
-        timers: list[tuple[str, float]] = []
-        wake = context.wake_fsm.state
-
-        # ① 트리거 — 기상했고, 아직 안 마셨고, 집에 있어야 한다
-        if wake.state != "AWAKE" or wake.wake_t0 is None:
-            return timers
-        if wake.hydration_done:
-            return timers
-
-        # 기상 직후 몇 분은 묻지 않는다. 일어나자마자 물을 마시는
-        # 사람도 있고, 화장실부터 가는 사람도 있다.
-        now = self._clock.now()
-        grace = float(
-            self._config.value("scenarios", "wake", "hydration_grace_sec", default=900)
-        )
-        if now - wake.wake_t0 < grace:
-            return [("wake-hydration", wake.wake_t0 + grace)]
-
-        # ② 판정 — 개인 분포에서 지금이 이상하게 늦은가
-        decision = self._policy.evaluate_hydration(
-            context.away,
-            context.occupancy,
-            context.suppression,
-            wake_t0=wake.wake_t0,
-            hydration_done=wake.hydration_done,
-        )
-        decision_id = self._emit_decision(decision)
-
-        if not decision.candidate:      # 아직 평소 범위
-            recheck = float(
-                self._config.value("scenarios", "wake", "recheck_sec", default=300)
-            )
-            return [("wake-hydration", now + recheck)]
-
-        # ③ 발송
-        self._notifier.send(
-            scenario="WAKE_ROUTINE",
-            title=str(self._notify_value("WAKE_ROUTINE", "title", "수분 섭취")),
-            text=str(self._notify_value("WAKE_ROUTINE", "text", "물 한 잔 드세요")),
-            priority=str(self._notify_value("WAKE_ROUTINE", "priority", "normal")),
-            presence=context.presence,
-            suppression=context.suppression,
-            comply_kind="hydration",
-            comply_check="wake",
-            decision_id=decision_id,
-            confidence=decision.confidence,
-        )
-        return timers
+        """HYDRATION_PROMPT로 교체 예정"""
+        return []
 
     # ------------------------------------------------------------ 판정 발행
 
