@@ -166,6 +166,7 @@ class Engine:
             suppression=self.context._suppression_eval,
             t0log=t0log,
         )
+        self.context._on_hydration = self.scenarios.note_hydration
 
         self.received = 0
         self.dropped = 0

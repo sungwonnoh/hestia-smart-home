@@ -262,7 +262,7 @@ expiry_sec = 3600                 # 이 시각이 지나면 보내지 않는다 
 max_escalation = 2                # 명세: 최대 2단계. SAFETY 만 예외
 affinity = ["smart_tv", "smart_fridge", "display_node"]   # default 에도 필요 — 시나리오가 생략할 수 있음
 
-[notify.WAKE_ROUTINE]
+[notify.HYDRATION_PROMPT]
 affinity = ["smart_fridge", "smart_tv", "display_node"]
 comply_window_min = 30
 title = "수분 섭취"
@@ -376,6 +376,33 @@ end_sustain_sec = 15               # moving_since 가 이만큼 지속돼야 sle
 probe_dim_levels = [0.7, 0.3]      # 프로브 시작 시점 밝기 대비
 probe_transition_ms = 30000
 restore_brightness = 100           # 소등 감지 시 되돌릴 밝기
+
+
+[scenarios.hydration]
+# 간격 — gap_from 이 sleep_end 면 sleep_end_gap_sec, 아니면 gap_sec
+gap_sec = 14400                 # 4시간 — 마지막 급수부터
+short_gap_sec = 10800           # 덥거나 건조하면 3시간
+sleep_end_gap_sec = 7200        # 2시간 — 깬 뒤부터. 낮잠도 포함
+renotify_sec = 7200             # 알림 뒤 2시간
+max_repeat = 2                  # 안 마셔도 보내는 최대 횟수
+
+# 환경 — 둘 다면 HEAT 우선, 합쳐 하루 1회
+hot_temp_c = 28
+hot_exit_c = 26
+dry_humidity_pct = 35
+dry_exit_pct = 40
+
+# 일일 권장량 — 정수기 물만 센다
+daily_target_ml = 1500
+checkpoint_hour = 20            # 외출 중이면 그날은 건너뜀
+
+# 귀가
+return_min_away_sec = 7200      # 2시간 넘게 나갔다 와야
+return_delay_sec = 600          # 귀가 10분 뒤
+
+# 중단
+pause_start = "22:00"
+pause_end = "06:00"
 
 
 # ============================================================ 안전

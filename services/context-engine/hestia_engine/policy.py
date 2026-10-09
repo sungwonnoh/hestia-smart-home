@@ -103,30 +103,6 @@ class InterventionPolicy:       # 개입 관련 정책
             scenario=scenario,
         )
 
-    def evaluate_hydration(
-        self,
-        away: AwayContext,
-        occupancy: OccupancyContext,
-        suppression: SuppressionContext,
-        wake_t0: float,
-        hydration_done: bool,
-        *,
-        scenario: str = "WAKE_ROUTINE",
-    ) -> Decision:
-        """기상 후 물을 마시지 않은 시간이 평소보다 긴가.
-           기준점이 자정이 아니라 기상 시각이다 — "몇 시에" 가 아니라 "기상하고 몇 분 만에" 를 묻는 분포이기 때문이다.
-        """
-        return self._evaluate(
-            kind="hydration",
-            dist_name="hydration_lag",
-            threshold_key="hydration",
-            away=away,
-            occupancy=occupancy,
-            suppression=suppression,
-            done=hydration_done,
-            scenario=scenario,
-            since=wake_t0,
-        )
 
     # ------------------------------------------------------------ 내부
 

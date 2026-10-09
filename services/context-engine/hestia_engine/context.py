@@ -810,6 +810,7 @@ class ContextEngine:
         self.suppression: SuppressionContext | None = None
         self._day_prev: Any | None = None
         self._asleep_area: str | None = None
+        self._on_hydration: Callable[[int], None] | None = None
 
 
     def recompute(self) -> tuple[Context, ...]:
@@ -888,6 +889,10 @@ class ContextEngine:
 
         if isinstance(msg, m.DispensedEvent):
             self.day_fsm.note_hydration()
+            # 양은 DayState 에 담지 않는다 — 시각 목록만 발행한다.
+            # 일일 권장량 누적은 시나리오가 들고 있는다.
+            if self._on_hydration is not None:
+                self._on_hydration(msg.amount_ml or 0)
 
     def allows(self, scenario: str) -> bool:
         """이 시나리오의 알림을 지금 보내도 되는가.
