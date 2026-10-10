@@ -39,6 +39,35 @@ synthetic.py  ─┼─→ KdeSample ─→ fit_distribution ─→ density + pr
 t0 adapter    ─┘
 ```
 
+## 식사: 끼니 구간 (meal_time peaks)
+
+`meal_time`은 하루 전체 식사(아침·점심·저녁) 분포라 봉우리가 여러 개입니다.
+전체 predictability는 규칙적인 사람도 낮게(0.07~0.11) 나와 판단 게이트로 쓸 수 없어서,
+끼니가 2개 이상이면 **끼니 구간과 끼니별 predictability**를 함께 보냅니다 (Context Engine 합의).
+
+```json
+"meal_time": {
+  "grid_min": 0, "grid_step": 15, "density": [...],
+  "peaks": [
+    {"center": 465,  "from": 45,  "to": 615, "predictability": 0.41},
+    {"center": 675,  "from": 615, "to": 900, "predictability": 0.54},
+    {"center": 1065, "from": 900, "to": 45,  "predictability": 0.65}
+  ]
+}
+```
+
+| 필드 | 의미 |
+|---|---|
+| `center` | 그 끼니에 식사가 가장 몰린 칸의 시작 분 (구간 가운데가 아님) |
+| `from` / `to` | 끼니 구간, 자정 기준 분. `from` 포함 · `to` 미포함, `from > to` 면 자정을 넘음 |
+| `predictability` | 그 구간 식사만으로 다시 그린 KDE(96칸)의 predictability. 식사 2개 미만이면 `null` |
+
+- 끼니 = 발행하는 `meal_time` density 에서 균등분포(1/96)보다 높은 봉우리, 경계 = 봉우리 사이 최저점 (고정 식사 시각 없음)
+- 구간은 하루를 빈틈없이 나눕니다 (앞 끼니 `to` == 다음 끼니 `from`)
+- 봉우리가 1개 이하면 `peaks` 를 넣지 않습니다 → Context Engine 은 전체 predictability 사용
+- 끼니 수는 사람마다 다릅니다 (CASAS: Cairo 3, Aruba 2, Tulum2 2)
+- 임계값(`[thresholds.meal] predictability_min`)은 Context Engine 정책입니다
+
 ## 수면: 밤잠 / 낮잠 구분 (학습 데이터 선별)
 
 `sleep_time` / `wake_time`은 **밤잠만** 학습합니다. 구분은 `sleep_sessions.py`가 RPi4 배치에서 합니다.

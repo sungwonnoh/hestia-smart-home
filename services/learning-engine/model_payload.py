@@ -5,6 +5,7 @@ hestia/model/kde payload 생성과 검증.
       "version": 1, "sent_ts": ..., "src_id": "rpi4", "trained_at": ...,
       "sample_days": ...,
       "distributions": {name: {"grid_min", "grid_step", "density"}},
+                        meal_time 은 끼니가 2개 이상이면 "peaks" 도 있다
       "predictability": {name: 0~1}
     }
 
@@ -198,8 +199,18 @@ def validate_distribution(name: str, dist) -> None:
     if name not in DISTRIBUTION_KIND:
         raise PayloadError(f"알 수 없는 distribution: {name!r}")
 
-    if not isinstance(dist, dict) or set(dist) != {"grid_min", "grid_step", "density"}:
-        raise PayloadError(f"{name}: grid_min / grid_step / density만 있어야 합니다.")
+    allowed = {"grid_min", "grid_step", "density"} | ({"peaks"} if name in PEAKS_DISTRIBUTIONS else set())
+
+    if (
+        not isinstance(dist, dict)
+        or not {"grid_min", "grid_step", "density"} <= set(dist)
+        or not set(dist) <= allowed
+    ):
+        raise PayloadError(
+            f"{name}: grid_min / grid_step / density"
+            + (" (+ peaks)" if name in PEAKS_DISTRIBUTIONS else "")
+            + "만 있어야 합니다."
+        )
 
     grid = grid_for(name)
 
@@ -229,6 +240,66 @@ def validate_distribution(name: str, dist) -> None:
     total = math.fsum(density)
     if abs(total - 1.0) > DENSITY_SUM_TOLERANCE:
         raise PayloadError(f"{name}: density 합이 1이 아닙니다 ({total})")
+
+    if "peaks" in dist:
+        validate_peaks(name, dist["peaks"])
+
+
+# ==================================================================== meal_time peaks
+
+
+# 끼니 구간(peaks)을 싣는 distribution
+PEAKS_DISTRIBUTIONS = {"meal_time"}
+
+PEAK_KEYS = {"center", "from", "to", "predictability"}
+
+
+def _in_arc(start: float, end: float, x: float) -> bool:
+    """x 가 [start, end) 안인가. start > end 면 자정을 넘는 구간."""
+
+    if start < end:
+        return start <= x < end
+
+    return x >= start or x < end
+
+
+def validate_peaks(name: str, peaks) -> None:
+    """
+    Context Engine 합의 규칙.
+
+    - 있으면 끼니 2개 이상 (1개 이하면 peaks 를 넣지 않는다)
+    - center / from / to 는 0 이상 1440 미만 분, from > to 면 자정을 넘는 구간
+    - center 는 [from, to) 안
+    - predictability 는 null 또는 0~1
+    - 구간끼리 겹치지 않는다
+    """
+
+    if not isinstance(peaks, list) or len(peaks) < 2:
+        raise PayloadError(f"{name}.peaks는 끼니 2개 이상의 배열이어야 합니다 (1개 이하면 생략).")
+
+    for i, p in enumerate(peaks):
+        if not isinstance(p, dict) or set(p) != PEAK_KEYS:
+            raise PayloadError(f"{name}.peaks[{i}]: center / from / to / predictability만 있어야 합니다.")
+
+        for key in ("center", "from", "to"):
+            v = p[key]
+            if not _is_number(v) or not 0 <= v < MINUTES_PER_DAY:
+                raise PayloadError(f"{name}.peaks[{i}].{key}는 0 이상 {MINUTES_PER_DAY} 미만이어야 합니다: {v!r}")
+
+        if p["from"] == p["to"]:
+            raise PayloadError(f"{name}.peaks[{i}]: from과 to가 같습니다.")
+
+        if not _in_arc(p["from"], p["to"], p["center"]):
+            raise PayloadError(f"{name}.peaks[{i}]: center가 [from, to) 구간 밖입니다.")
+
+        pred = p["predictability"]
+        if pred is not None and (not _is_number(pred) or not 0 <= pred <= 1):
+            raise PayloadError(f"{name}.peaks[{i}].predictability는 null 또는 0~1이어야 합니다: {pred!r}")
+
+    for i, a in enumerate(peaks):
+        for j, b in enumerate(peaks[i + 1:], start=i + 1):
+            if _in_arc(a["from"], a["to"], b["from"]) or _in_arc(b["from"], b["to"], a["from"]):
+                raise PayloadError(f"{name}.peaks[{i}]와 peaks[{j}] 구간이 겹칩니다.")
 
 
 if __name__ == "__main__":

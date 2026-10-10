@@ -15,6 +15,7 @@ from baseline import (
     load_aruba_samples,
     load_t0_jsonl,
     parse_t0_line,
+    parse_t0_record,
     t0_to_kde_sample,
     t0_to_kde_samples,
     t0_to_minutes,
@@ -264,13 +265,15 @@ def test_aruba_model_regression():
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="context-engine 은 Python 3.11+")
 def test_context_engine_t0_log_is_readable(tmp_path):
-    """Context Engine 의 FileT0Log 가 쓴 파일을 그대로 읽을 수 있어야 한다."""
+    """Context Engine 의 FileT0Log 가 쓴 파일을 그대로 읽어 학습까지 할 수 있어야 한다."""
     sys.path.insert(0, str(CONTEXT_ENGINE))
     try:
         from hestia_engine.fsm import FileT0Log, T0Entry
         from hestia_engine.replay import replay_file
     finally:
         sys.path.remove(str(CONTEXT_ENGINE))
+
+    from baseline import load_t0_records, t0_records_to_kde_samples
 
     _, _, _, memory_log = replay_file(CONTEXT_ENGINE / "tests" / "data" / "morning.jsonl", echo=False)
     assert memory_log.entries
@@ -280,9 +283,18 @@ def test_context_engine_t0_log_is_readable(tmp_path):
     for entry in memory_log.entries:
         file_log.write(entry)
 
-    samples = load_t0_jsonl(path)
-    assert [asdict(s) for s in samples] == [asdict(e) for e in memory_log.entries]
+    # T0Sample 의 필드는 모두 T0Entry 에 있어야 한다 (T0Entry 는 수면 전용 필드가 더 있다)
+    core = list(T0Sample.__dataclass_fields__)
+    assert set(core) <= set(T0Entry.__dataclass_fields__)
 
-    inputs = build_training_input(t0_to_kde_samples(samples))
-    assert "wake_time" in inputs
-    assert T0Entry.__dataclass_fields__.keys() == T0Sample.__dataclass_fields__.keys()
+    records = load_t0_records(path)
+    assert len(records) == len(memory_log.entries)
+
+    for record, entry in zip(records, memory_log.entries):
+        assert asdict(parse_t0_record(record)) == {k: getattr(entry, k) for k in core}
+        if entry.type == "sleep_start":
+            assert record["area"] == entry.area            # 수면 필드를 잃지 않는다
+
+    # 기상은 Context Engine 이 더 이상 wake 로 남기지 않는다 — sleep_end 에서 온다
+    inputs = build_training_input(t0_records_to_kde_samples(records))
+    assert {"sleep_time", "wake_time"} <= set(inputs)
