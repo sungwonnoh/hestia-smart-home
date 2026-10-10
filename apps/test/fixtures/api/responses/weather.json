@@ -1,0 +1,17 @@
+{
+  "locationName": "서울",
+  "observedAt": "2026-10-10T12:00:00+09:00",
+  "temperatureC": 31.2,
+  "humidityPct": 58.0,
+  "precipitationMm": 0.0,
+  "precipType": "NONE",
+  "windSpeedMs": 1.8,
+  "warnings": [
+    {
+      "name": "폭염경보",
+      "type": "HEAT",
+      "level": "WARNING"
+    }
+  ],
+  "stale": false
+}

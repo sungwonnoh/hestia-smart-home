@@ -31,10 +31,12 @@ from ..schemas.notification import (
     NotifyPushPayload,
     payload_metadata,
 )
+from ..schemas.weather import WeatherPayload
 from .context_service import StateCache
 from .device_service import DeviceService
 from .monitor_service import MonitorHub
 from .notification_service import NotificationService, to_out
+from .weather_service import WeatherService
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +53,7 @@ SUBSCRIPTIONS = (
     "hestia/intervention/outcome",
     "hestia/registry/devices",
     "hestia/system/profile",
+    "hestia/external/weather",
 )
 
 
@@ -69,6 +72,7 @@ class IngestService:
         devices: DeviceService,
         notifications: NotificationService,
         monitor: MonitorHub,
+        weather: WeatherService | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._cache = cache
@@ -76,6 +80,7 @@ class IngestService:
         self._devices = devices
         self._notifications = notifications
         self._monitor = monitor
+        self._weather = weather
         self._clock = clock
         self._lock = threading.Lock()
         self.stats: Counter = Counter()
@@ -188,6 +193,12 @@ class IngestService:
             self._cache.set_registry(registry.devices)
             self._devices.bind_unassigned()
             self._emit("registry_update", registry.sent_ts, "hestia/registry/devices", payload)
+            return True
+
+        if parts[1:] == ["external", "weather"] and self._weather is not None:
+            weather = WeatherPayload.model_validate(payload)
+            if self._weather.on_payload(weather):
+                self._emit("weather_update", weather.sent_ts, "hestia/external/weather", payload)
             return True
 
         if parts[1:] == ["system", "profile"]:

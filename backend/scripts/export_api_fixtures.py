@@ -112,6 +112,20 @@ def collect() -> dict[str, Any]:
         out["explanation_by_id"] = get(f"/explanations/{out['explanations_latest']['id']}")
         out["preferences"] = get("/preferences")
 
+        # RPi4 weather 서비스(services/weather)가 보내는 형태. 관측은 이번 정시 (stale=false)
+        observed = int(time.time()) // 3600 * 3600
+        weather = envelope(
+            "rpi4", reason="reply", source="kma",
+            location={"name": "서울", "nx": 60, "ny": 127},
+            observed_at=observed, temperature_c=31.2, humidity_pct=58.0,
+            precip_1h_mm=0.0, precip_type="NONE", wind_speed_ms=1.8,
+            warnings=[{"name": "폭염경보", "type": "HEAT", "level": "WARNING"}],
+            warnings_issued_at=observed,
+        )
+        if not ingest.handle("hestia/external/weather", json.dumps(weather, ensure_ascii=False)):
+            raise RuntimeError("날씨 메시지가 버려졌다")
+        out["weather"] = get("/weather")
+
         medication = json.loads((REQUESTS / "medication.json").read_text(encoding="utf-8"))
         client.post(api + "/medications", json=medication).raise_for_status()
         out["medications"] = get("/medications")
