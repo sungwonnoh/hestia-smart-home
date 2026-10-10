@@ -802,7 +802,7 @@ class ContextEngine:
 
         self.meal_fsm = MealFSM(clock, config, world, t0log)
         self.day_fsm = DayFSM(clock, config, world, t0log)
-        self.meal_fsm.on_close = self.day_fsm.note_meal
+        self.meal_fsm.on_close = self._close_meal
 
         self.presence: PresenceContext | None = None
         self.away: AwayContext | None = None
@@ -813,6 +813,7 @@ class ContextEngine:
         self._day_prev: Any | None = None
         self._asleep_area: str | None = None
         self._on_hydration: Callable[[int], None] | None = None
+        self._on_meal_close: Callable[[Any, float], None] | None = None
 
 
     def recompute(self) -> tuple[Context, ...]:
@@ -897,6 +898,14 @@ class ContextEngine:
             # 일일 권장량 누적은 시나리오가 들고 있는다.
             if self._on_hydration is not None:
                 self._on_hydration(msg.amount_ml or 0)
+
+    def _close_meal(self, session: Any, closed_at: float) -> None:
+        """MealFSM 이 묶음을 닫을 때. DayFSM 기록이 먼저다 —
+        시나리오가 meals 를 읽을 수 있어야 한다.
+        """
+        self.day_fsm.note_meal(session, closed_at)
+        if self._on_meal_close is not None:
+            self._on_meal_close(session, closed_at)
 
     def allows(self, scenario: str) -> bool:
         """이 시나리오의 알림을 지금 보내도 되는가.

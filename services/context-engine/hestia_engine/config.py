@@ -102,6 +102,7 @@ class Config:
         self.policy = policy
         self._profile = "REAL"
         self._install(sensors, devices)
+        self._medications: tuple[Any, ...] = ()
 
     # ------------------------------------------------------------ 인덱스
 
@@ -368,6 +369,35 @@ class Config:
 
         self._install(tuple(sensors), tuple(devices))
         log.info("registry 적용: 센서 %d, 가전 %d", len(sensors), len(devices))
+
+
+    # ------------------------------------------------------------ 복약
+
+    def apply_medications(self, entries: Any) -> None:
+        """MedicationRegistry 의 medications 로 전체 교체한다.
+
+        retained 라 재시작하면 브로커가 다시 물려준다. 부분 갱신이
+        아닌 이유는 registry 와 같다 — 앱에서 약을 지울 수 있다.
+        """
+        self._medications = tuple(entries)
+        log.info("복약 등록 적용: %d건", len(self._medications))
+
+    def medications_on(self, date_str: str) -> tuple[Any, ...]:
+        """그날 유효한 약. start_date <= date <= end_date (양끝 포함).
+
+        날짜 판단을 여기 모은다 — 시나리오 둘(복약·재처방)이 각자
+        계산하면 경계일에서 엇갈린다.
+        """
+        return tuple(
+            m for m in self._medications
+            if m.start_date <= date_str <= m.end_date
+        )
+
+    @property
+    def medications(self) -> tuple[Any, ...]:
+        """등록된 전부. 날짜 무관 — 재처방 알림이 쓴다."""
+        return self._medications
+    
 
     def __repr__(self) -> str:
         return (

@@ -156,7 +156,7 @@ class MealFSM:
         self._log = t0log
         self.session: MealSession | None = None
         self._timed_out = False        # 타임아웃 후 재개 차단
-        self.on_close: Callable[[float], None] | None = None
+        self.on_close: Callable[[MealSession, float], None] | None = None
 
     @property
     def t0(self) -> float | None:
@@ -281,9 +281,8 @@ class MealFSM:
             "식사 묶음 종료 t0=%s eat_t0=%s duration=%.0f", 
             s.t0, s.eat_t0, duration
         )
-
         if self.on_close is not None:
-            self.on_close(s.t0)
+            self.on_close(s, now if use_now else s.last_active_at)
 
     def _evidence_t0(self, state: str, now: float) -> float | None:
         """근거가 생긴 시각을 t0 로 쓴다. 상태가 바뀐 시각이 아니다.(찾지 못하면 None-retained)
@@ -395,8 +394,13 @@ class DayFSM:
         }
         for e in self._log.of_date(today):
             key = f"{e.type}s"
-            if key in buckets:
-                buckets[key].append(e.t0)
+            if key not in buckets:
+                continue
+            # meals 는 eat_t0 기준이다. 조리만 하고 안 먹은 묶음은
+            # eat_t0 가 없으니 끼니로 세지 않는다.
+            ts = e.eat_t0 if e.type == "meal" else e.t0
+            if ts is not None:
+                buckets[key].append(ts)
 
         self.state = DayState(
             name="day", since=self._clock.now(), date=today,
@@ -414,14 +418,19 @@ class DayFSM:
         """정수기 급수."""
         self._append("hydrations", "hydration", prompted)
 
-    def note_meal(self, t0: float) -> None:
-        """MealFSM 이 묶음을 닫을 때 호출.
-           t0 로그는 MealFSM 이 발행한다.
+    def note_meal(self, session: Any, closed_at: float) -> None:
+        """MealFSM 이 묶음을 닫을 때 호출. t0 로그는 MealFSM 이 발행.
+           먹은 시각(eat_t0) 기준으로.
         """
+        if session.eat_t0 is None:
+            return
+
         self._roll_day(self._clock.now())
-        if day_key(t0) != self.state.date:
+        if day_key(session.eat_t0) != self.state.date:
             return                       # 자정을 넘긴 묶음 — 어제 것이다
-        self.state = _replace(self.state, meals=(*self.state.meals, t0))
+        self.state = _replace(
+            self.state, meals=(*self.state.meals, session.eat_t0)
+        )
 
     def note_medication(self, prompted: bool = False) -> None:
         """복약은 이벤트로 판정할 수 없다 — ack 로만 확인한다 (명세)."""

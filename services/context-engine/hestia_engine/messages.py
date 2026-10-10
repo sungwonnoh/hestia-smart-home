@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from typing import Any
+from datetime import date
 
 log = logging.getLogger(__name__)       #현재 모듈(파일) 전용 로거 생성
 
@@ -531,6 +532,7 @@ def parse_device_cmd(payload: dict, base: dict, target: str) -> DeviceCommand:
 ACK_TYPE = frozenset({"DELIVERED", "SEEN"})
 PROFILE = frozenset({"REAL", "DEMO"})
 MODEL_NAME = frozenset({"kde", "hmm", "classifier"})
+MEDICATION_SCHEDULE = frozenset({"after_meal", "fixed"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -586,6 +588,40 @@ class RegistryEntry:
     channel: bool = False                # 알림 채널 사용 가능 (가전만)
     enabled: bool = True                 # false 면 판단에서 제외
     power_profile: str | None = None     # 전력 센서가 붙은 기기 (policy 의 [power.*] 키)
+
+
+@dataclass(frozen=True, slots=True)
+class MedicationSchedule:
+    """복약 시점. 식후와 고정 시각 둘.
+
+    식후 약은 끼니를 고르지 않는다 — 봉우리 앞에서부터 쓴다.
+    '아침·저녁만' 같은 처방은 고정 시각으로 등록한다.
+    """
+
+    type: str                            # after_meal / fixed
+    delay_min: int = 0                   # after_meal — 식사 종료 후 분
+    times: tuple[int, ...] = ()          # fixed — 자정 기준 분
+
+
+@dataclass(frozen=True, slots=True)
+class MedicationEntry:
+    id: str
+    name: str
+    schedule: MedicationSchedule
+    start_date: str                      # YYYY-MM-DD
+    end_date: str                        # 이번 처방분이 떨어지는 날 (포함)
+    days: int = 0                        # 며칠분. 문구와 대조용
+    refill_notice: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class MedicationRegistry(SystemMessage):
+    """hestia/registry/medications — 앱 발행, retained.
+
+    등록 시 한 번 보내고 엔진이 날짜를 스스로 판단한다.
+    """
+
+    medications: tuple[MedicationEntry, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -674,6 +710,92 @@ def parse_registry(payload: dict, base: dict) -> RegistryDevices:
             )
         )
     return RegistryDevices(**base, devices=tuple(entries))
+
+
+def parse_medications(payload: dict, base: dict) -> MedicationRegistry:
+    raw = _req(payload, "medications", list)
+    entries = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise SchemaError(f"medications 항목이 객체가 아님: {item!r}")
+
+        sched = _req(item, "schedule", dict)
+        type_ = _one_of(sched, "type", MEDICATION_SCHEDULE)
+
+        if type_ == "after_meal":
+            schedule = MedicationSchedule(
+                type=type_,
+                delay_min=_opt(sched, "delay_min", int, 30),
+            )
+        else:
+            schedule = MedicationSchedule(
+                type=type_,
+                times=tuple(_parse_times(sched)),
+            )
+
+        start = _req(item, "start_date", str)
+        end = _req(item, "end_date", str)
+        days = _opt(item, "days", int, 0)
+        _check_dates(item.get("id"), start, end, days)
+
+        entries.append(
+            MedicationEntry(
+                id=_req(item, "id", str),
+                name=_req(item, "name", str),
+                schedule=schedule,
+                start_date=start,
+                end_date=end,
+                days=days,
+                refill_notice=_opt(item, "refill_notice", bool, False),
+            )
+        )
+    return MedicationRegistry(**base, medications=tuple(entries))
+
+
+def _parse_times(sched: dict) -> list[int]:
+    """"08:00" 을 자정 기준 분으로. 뒤에서 비교가 단순해진다."""
+    raw = _req(sched, "times", list)
+    if not raw:
+        raise SchemaError("fixed 인데 times 가 비어 있음")
+
+    out = []
+    for t in raw:
+        if not isinstance(t, str):
+            raise SchemaError(f"times 항목이 문자열이 아님: {t!r}")
+        try:
+            hour, minute = t.split(":")
+            h, m = int(hour), int(minute)
+        except (ValueError, AttributeError) as exc:
+            raise SchemaError(f"times 형식이 HH:MM 이 아님: {t!r}") from exc
+        if not (0 <= h < 24 and 0 <= m < 60):
+            raise SchemaError(f"times 가 시각이 아님: {t!r}")
+        out.append(h * 60 + m)
+    return sorted(out)
+
+
+def _check_dates(med_id: Any, start: str, end: str, days: int) -> None:
+    """날짜 형식을 보고, days 와 범위가 어긋나면 경고만 남긴다.
+
+    판단은 end_date 로 한다 — 날짜 계산을 앱과 엔진이 각각 하면
+    경계일에서 하루씩 엇갈린다. days 는 문구와 대조용이다.
+    """
+    try:
+        s = date.fromisoformat(start)
+    except ValueError as exc:
+        raise SchemaError(f"start_date 가 YYYY-MM-DD 가 아님: {start!r}") from exc
+    try:
+        e = date.fromisoformat(end)
+    except ValueError as exc:
+        raise SchemaError(f"end_date 가 YYYY-MM-DD 가 아님: {end!r}") from exc
+
+    if e < s:
+        raise SchemaError(f"end_date 가 start_date 보다 이름: {start} ~ {end}")
+
+    if days > 0 and (e - s).days + 1 != days:
+        log.warning(
+            "복약 %s: days=%d 와 날짜 범위(%s~%s)가 어긋남. end_date 를 따른다.",
+            med_id, days, start, end,
+        )
 
 
 def parse_profile(payload: dict, base: dict) -> SystemProfile:
@@ -765,6 +887,11 @@ def _dispatch(parts: list[str], payload: dict, recv_ts: float) -> Message | None
         case ["hestia", "registry", "devices"]:
             src = _req(payload, "src_id", str)
             return parse_registry(payload, check_envelope(payload, recv_ts, src))
+
+        case ["hestia", "registry", "medications"]:
+            src = _req(payload, "src_id", str)
+            return parse_medications(payload, check_envelope(payload, recv_ts, src))
+        
 
         case ["hestia", "system", "profile"]:
             src = _req(payload, "src_id", str)

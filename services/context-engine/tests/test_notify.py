@@ -35,11 +35,11 @@ class FakeWake:
 
 
 class Ctx:
-    def __init__(self, tmp_path, start: float = MORNING):
+    def __init__(self, tmp_path, start: float = MORNING, policy: str = ""):
         h = tmp_path / "home.toml"
         p = tmp_path / "policy.toml"
         h.write_text(HOME, encoding="utf-8")
-        p.write_text(POLICY, encoding="utf-8")
+        p.write_text(POLICY + policy, encoding="utf-8")
         self.config = load(h, p)
         self.clock = ReplayClock(start)
         self.sched = Scheduler(self.clock)
@@ -95,6 +95,21 @@ class Ctx:
     def of(self, topic: str) -> tuple[dict, ...]:
         return self.pub.of_topic(f"hestia/{topic}")
 
+
+ESCALATING = """
+[notify.TEST_ESCALATE]
+affinity = ["smart_fridge", "smart_tv"]
+requires_ack = true
+ack_deadline_sec = 600
+max_escalation = 2
+"""
+
+
+@pytest.fixture
+def esc(tmp_path):
+    """에스컬레이션 동작 전용. 운영 시나리오 설정이 바뀌어도
+    이 테스트들은 영향을 받지 않는다."""
+    return Ctx(tmp_path, policy=ESCALATING)
 
 @pytest.fixture
 def c(tmp_path):
@@ -383,7 +398,7 @@ def test_limit_blocks_send(c):
     c.device_on("vd-05", "smart_fridge")
     c.device_on("vd-01", "smart_tv")
     assert c.send(scenario="WAKE_ROUTINE") is not None
-    assert c.at(MORNING + 120).send(scenario="MEDICATION_PROMPT") is None
+    assert c.at(MORNING + 120).send(scenario="REFILL_PROMPT") is None
 
 
 # ============================================================ ack
@@ -437,29 +452,29 @@ def test_unknown_ack_ignored(c):
 # ============================================================ 에스컬레이션
 
 
-def test_escalates_to_voice(c):
-    c.device_on("vd-05", "smart_fridge")
-    nid = c.send(scenario="MEDICATION_PROMPT")     # requires_ack = true
+def test_escalates_to_voice(esc):
+    esc.device_on("vd-10", "display_node")
+    nid = esc.send(scenario="TEST_ESCALATE", presence=presence_at("living"))
 
-    c.at(MORNING + 700)
-    c.sched.run_due()
+    esc.at(MORNING + 700)
+    esc.sched.run_due()
 
-    n = c.notifier.store.get(nid)
+    n = esc.notifier.store.get(nid)
     assert n.escalation_level == 2
     assert VOICE in n.channels
-    assert len(c.of("notify/speak")) == 1
+    assert len(esc.of("notify/speak")) == 1
 
 
-def test_escalation_stops_at_max(c):
-    c.device_on("vd-05", "smart_fridge")
-    nid = c.send(scenario="MEDICATION_PROMPT")
+def test_escalation_stops_at_max(esc):
+    esc.device_on("vd-05", "smart_fridge")
+    nid = esc.send(scenario="TEST_ESCALATE")
 
-    c.at(MORNING + 700)
-    c.sched.run_due()
-    c.at(MORNING + 1400)
-    c.sched.run_due()
+    esc.at(MORNING + 700)
+    esc.sched.run_due()
+    esc.at(MORNING + 1400)
+    esc.sched.run_due()
 
-    n = c.notifier.store.get(nid)
+    n = esc.notifier.store.get(nid)
     assert n.is_open is False
     assert n.closed_reason == CLOSED_TIMEOUT
 
@@ -471,14 +486,14 @@ def test_no_escalation_without_ack_requirement(c):
     assert f"notify-deadline-{nid}" not in c.sched.keys()
 
 
-def test_acked_stops_escalation(c):
-    c.device_on("vd-05", "smart_fridge")
-    nid = c.send(scenario="MEDICATION_PROMPT")
-    c.notifier.on_ack(nid, "SEEN", "vd-05")
+def test_acked_stops_escalation(esc):
+    esc.device_on("vd-05", "smart_fridge")
+    nid = esc.send(scenario="TEST_ESCALATE")
+    esc.notifier.on_ack(nid, "SEEN", "vd-05")
 
-    c.at(MORNING + 700)
-    c.sched.run_due()
-    assert c.notifier.store.get(nid).escalation_level == 1
+    esc.at(MORNING + 700)
+    esc.sched.run_due()
+    assert esc.notifier.store.get(nid).escalation_level == 1
 
 
 # ============================================================ comply 판정
@@ -594,18 +609,18 @@ def test_outcome_without_comply_kind(c):
     assert o["user_response"]["complied"] is False
 
 
-def test_channels_tried_accumulates(c):
+def test_channels_tried_accumulates(esc):
     """L3 가 어느 채널이 실패했는지 알아야 학습된다."""
-    c.device_on("vd-10", "display_node")
-    nid = c.send(scenario="MEDICATION_PROMPT", presence=presence_at("living"))
+    esc.device_on("vd-10", "display_node")
+    nid = esc.send(scenario="TEST_ESCALATE", presence=presence_at("living"))
 
 
-    c.at(MORNING + 700)
-    c.sched.run_due()
-    c.at(MORNING + 1400)
-    c.sched.run_due()
+    esc.at(MORNING + 700)
+    esc.sched.run_due()
+    esc.at(MORNING + 1400)
+    esc.sched.run_due()
 
-    tried = c.of("intervention/outcome")[0]["user_response"]["channels_tried"]
+    tried = esc.of("intervention/outcome")[0]["user_response"]["channels_tried"]
     assert "vd-10" in tried
     assert VOICE in tried
 
@@ -632,14 +647,14 @@ def test_send_sets_cooldown(c):
     assert seen == ["WAKE_ROUTINE"]
 
 
-def test_escalation_does_not_reset_cooldown(c):
+def test_escalation_does_not_reset_cooldown(esc):
     """에스컬레이션은 같은 알림의 단계지 새 개입이 아니다."""
     seen: list[str] = []
-    c.notifier._note_sent = seen.append
-    c.device_on("vd-10", "display_node")
+    esc.notifier._note_sent = seen.append
+    esc.device_on("vd-10", "display_node")
 
-    c.send(scenario="MEDICATION_PROMPT", presence=presence_at("living"))
-    c.at(MORNING + 700)
-    c.sched.run_due()
+    esc.send(scenario="TEST_ESCALATE", presence=presence_at("living"))
+    esc.at(MORNING + 700)
+    esc.sched.run_due()
 
-    assert seen == ["MEDICATION_PROMPT"]       # 한 번만
+    assert seen == ["TEST_ESCALATE"]       # 한 번만

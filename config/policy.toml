@@ -273,7 +273,9 @@ text = "물 한 잔 드세요"
 
 [notify.MEDICATION_PROMPT]
 affinity = ["smart_fridge", "smart_tv"]
-requires_ack = true
+requires_ack = false
+fire_and_forget = true
+cooldown_sec = 0          # 약마다 시각이 다르다 — 쿨다운으로 막지 않는다
 comply_window_min = 60
 title = "복약 시간"
 text = "식사 후 약 드실 시간입니다"
@@ -308,6 +310,13 @@ cooldown_sec = 10800        # 3시간 — 끼니 간격보다 짧게
 channels = ["display", "voice"]
 comply_window_min = 60
 
+[notify.REFILL_PROMPT]
+affinity = ["smart_fridge", "smart_tv"]
+requires_ack = false
+comply_window_min = 0
+title = "처방 안내"
+text = "약이 곧 떨어집니다"
+
 
 # ============================================================ 총량 제한
 #
@@ -317,7 +326,7 @@ comply_window_min = 60
 max_per_day = 8
 min_interval_sec = 1800
 quiet_hours = { start = "22:00", end = "07:00" }   # 음성 채널 금지 시간대
-exempt_scenarios = ["SLEEP_ROUTINE"]               # SLEEP_ROUTINE 알림은 총량 제한에서 제외
+exempt_scenarios = ["SLEEP_ROUTINE", "MEDICATION_PROMPT"]               # SLEEP_ROUTINE 알림은 총량 제한에서 제외
 
 
 # ============================================================ 관측 창
@@ -418,6 +427,14 @@ pause_end = "06:00"
 [scenarios.meal]
 pause_start = "21:00"
 pause_end = "05:00"
+
+[scenarios.medication]
+max_meal_slots = 3
+
+[scenarios.refill]
+notice_days = 3
+hour = 9
+retry_sec = 1800
 
 
 # ============================================================ 안전

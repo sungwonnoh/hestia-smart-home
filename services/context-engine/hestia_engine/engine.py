@@ -167,6 +167,7 @@ class Engine:
             t0log=t0log,
         )
         self.context._on_hydration = self.scenarios.note_hydration
+        self.context._on_meal_close = self.scenarios.note_meal_closed
 
         self.received = 0
         self.dropped = 0
@@ -209,6 +210,10 @@ class Engine:
             # 변경 전 매핑으로 진행 중이던 판단은 무효다.
             self._config.apply_registry(msg.devices)
             self._reset_contexts()
+
+        if isinstance(msg, m.MedicationRegistry):
+            # 복약
+            self._config.apply_medications(msg.medications)
 
         if isinstance(msg, m.ModelMessage):
             # 검증에 실패하면 교체하지 않는다 — 직전 모델로 계속 판단한다

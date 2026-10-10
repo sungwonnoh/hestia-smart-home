@@ -40,6 +40,7 @@ CLOSED_SEEN = "SEEN"
 CLOSED_TIMEOUT = "TIMEOUT"
 CLOSED_EXPIRED = "EXPIRED"
 CLOSED_CANCELLED = "CANCELLED"
+CLOSED_SENT = "SENT"
 
 # 화면에 문구를 띄울 수 없는 기기 종류와 그것을 대신할 종류
 PROXY_TYPES = {
@@ -231,10 +232,14 @@ class ChannelSelector:
         return power is None or power == "ON"   # 해당 기기의 power가 ON이면 True
 
     def _voice_allowed(self, scenario: str) -> bool:
-        """quiet_hours 에는 음성을 쓰지 않는다. SAFETY 는 예외."""
-        if scenario == "SAFETY":
+        """quiet_hours 에는 음성을 쓰지 않는다. SAFETY 와 복약은 예외.
+
+        약은 거르면 안 된다 — 늦은 시각 처방이 있으면 그 시각에
+        말해야 한다.
+        """
+        if scenario in ("SAFETY", "MEDICATION_PROMPT"):
             return True
-        return not self._in_quiet_hours()       # 현재 시간이 quiet_hours 라면, voice_allowed: False
+        return not self._in_quiet_hours()
 
     def _in_quiet_hours(self) -> bool:
         window = self._config.value("limits", "quiet_hours", default=None)      # window: policy.toml의 [limits] 안에 있는 quiet_hour에 해당하는 딕셔너리
@@ -419,7 +424,13 @@ class Notifier:
             self._note_sent(scenario)
 
         self._push(pending, title, text)
-        self._arm(pending)
+
+        if self._policy(scenario, "fire_and_forget", default=False):
+            # 기다릴 응답이 없다. 열어두면 pending 에 영원히 쌓인다.
+            self._close(notify_id, CLOSED_SENT)
+        else:
+            self._arm(pending)
+
         log.info("알림 발송 %s %s → %s", notify_id, scenario, chosen)
         return notify_id
 

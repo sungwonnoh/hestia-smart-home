@@ -385,7 +385,7 @@ def test_heated_recent_boosts_eating(c):
     c.at(MORNING + 400).presence("vs-04", True, energy=12)
     assert c.a.factors["heated_sec"] is not None
     assert c.a.state == "EATING"
-    
+
 
 def test_brief_kitchen_visit_is_misc(c):
     """물 마시러 들른 것이 EATING 으로 잡히면 KDE 분포가 망가진다."""
