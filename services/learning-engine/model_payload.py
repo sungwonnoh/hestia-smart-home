@@ -231,7 +231,7 @@ def validate_distribution(name: str, dist) -> None:
     if any(v < 0 for v in density):
         raise PayloadError(f"{name}: density에 음수가 있습니다.")
 
-    # 시각 분포는 하루를 덮어야 한다. hydration_lag는 기준점이 기상이라 제외한다.
+    # 시각 분포는 하루를 덮어야 한다.
     if is_time_of_day(name):
         expected = int(MINUTES_PER_DAY // dist["grid_step"])
         if len(density) != expected:

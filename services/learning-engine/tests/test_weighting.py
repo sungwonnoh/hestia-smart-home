@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from baseline import build_model, fit_distribution
-from kde_fixtures import four_distributions
+from kde_fixtures import all_distributions
 from model_payload import build_kde_payload, validate_kde_payload
 from samples import KdeSample, values
 from weighting import (
@@ -62,8 +62,8 @@ def test_defaults_are_off():
 
 def test_off_is_identical_to_unweighted():
     """꺼져 있으면 기존 결과와 완전히 같다 — 머지해도 동작이 바뀌지 않는다."""
-    base = build_model(four_distributions())
-    off = build_model(four_distributions(), sample_weighting=SampleWeighting(), cold_start=None)
+    base = build_model(all_distributions())
+    off = build_model(all_distributions(), sample_weighting=SampleWeighting(), cold_start=None)
     assert off["distributions"] == base["distributions"]
     assert off["predictability"] == base["predictability"]
 
@@ -240,29 +240,22 @@ def test_cold_start_lowers_overconfidence():
 
 
 def test_missing_prior_falls_back_to_personal():
-    plain = build_model(four_distributions())
-    blended = build_model(four_distributions(), cold_start=ColdStart(14, {"meal_time": [1 / 96] * 96}))
+    plain = build_model(all_distributions())
+    blended = build_model(all_distributions(), cold_start=ColdStart(14, {"meal_time": [1 / 96] * 96}))
     assert blended["distributions"]["wake_time"] == plain["distributions"]["wake_time"]
     assert blended["meta"]["wake_time"]["cold_start"] == {"alpha": 1.0, "prior": False}
     assert blended["meta"]["meal_time"]["cold_start"]["prior"] is True
-
-
-def test_hydration_prior_uses_its_own_grid():
-    with pytest.raises(ValueError, match="길이"):
-        build_model(four_distributions(), cold_start=ColdStart(14, {"hydration_lag": [1 / 96] * 96}))
-    model = build_model(four_distributions(), cold_start=ColdStart(14, {"hydration_lag": [1 / 24] * 24}))
-    assert len(model["distributions"]["hydration_lag"]["density"]) == 24
 
 
 # ============================================================ payload
 
 
 def test_all_features_still_produce_valid_payload():
-    samples = four_distributions() + [meal(d, 600, prompted=True) for d in range(5)]
+    samples = all_distributions() + [meal(d, 600, prompted=True) for d in range(5)]
     model = build_model(
         samples,
         sample_weighting=SampleWeighting(recent_lambda=0.05, prompted_weight=0.3),
-        cold_start=ColdStart(14, {"meal_time": [1 / 96] * 96, "hydration_lag": [1 / 24] * 24}),
+        cold_start=ColdStart(14, {"meal_time": [1 / 96] * 96, "sleep_time": [1 / 96] * 96}),
     )
     payload = build_kde_payload(model)
     validate_kde_payload(payload, require_all=True)

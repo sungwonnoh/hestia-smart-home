@@ -13,30 +13,28 @@ Context Engine이 판단할 때 쓰는 "이 사람의 평소 시간 패턴"을 �
 | `wake_time` | 기상 시각 | 자정 기준 분 | 15분 × 96칸 | circular |
 | `sleep_time` | 취침 시각 | 자정 기준 분 | 15분 × 96칸 | circular |
 | `meal_time` | 식사 활동 시작 시각 | 자정 기준 분 | 15분 × 96칸 | circular |
-| `hydration_lag` | 기상 후 첫 수분 섭취까지 | 경과 분 | 5분 × 24칸 (0~120분) | 직선 |
 
 - circular: 1440분 주기. 23:50과 00:10은 20분 차이로 계산합니다.
-- `hydration_lag` 끝값 120분은 Context Engine `hydration_window_sec`(7200초) 기준입니다.
+- `hydration_lag` 는 팀 결정으로 KDE 에서 뺐습니다. Context Engine HYDRATION_PROMPT 는 분포 대신 간격 규칙을 쓰고,
+  t0 로그의 `hydration` 레코드는 KDE 학습에서 제외됩니다.
 - 표본이 없거나 KDE를 계산할 수 없는 분포는 모델에서 빠집니다 (빈 배열을 보내지 않음).
 
 ## 데이터 출처
 
-실제 Context Engine t0 로그가 쌓이기 전까지 공개 데이터와 synthetic으로 개발·검증합니다.
+실제 Context Engine t0 로그가 쌓이기 전까지 공개 데이터(CASAS)로 개발·검증합니다.
 
 | 출처 | 모듈 | 분포 | 비고 |
 |---|---|---|---|
 | CASAS Aruba | `aruba.py` | meal / sleep / wake | sleep·wake는 `Sleeping` 라벨 **proxy** |
 | CASAS Milan / Tulum2 / Cairo | `casas.py` | sleep / wake | 거주자별 **proxy**. predictability 비교·검증용 |
-| synthetic | `synthetic.py` | hydration_lag | CASAS에 수분 섭취 라벨 없음. **검증용 fixture** |
-| Context Engine t0 | `baseline.py` | meal / wake / hydration | |
+| Context Engine t0 | `baseline.py` | meal (+ 이전 로그의 wake) | `hydration` 은 제외 |
 | Context Engine t0 `sleep_start` / `sleep_end` | `sleep_sessions.py` | sleep / wake | 같은 t0 로그. 짝지어 수면으로 만든 뒤 밤잠만 학습 |
 
 모든 출처는 공통 표본 `KdeSample`(`samples.py`)로 바뀐 뒤 같은 KDE를 탑니다.
 
 ```text
-aruba.py      ─┐
-synthetic.py  ─┼─→ KdeSample ─→ fit_distribution ─→ density + predictability
-t0 adapter    ─┘
+aruba.py / casas.py ─┐
+t0 adapter          ─┴─→ KdeSample ─→ fit_distribution ─→ density + predictability
 ```
 
 ## 식사: 학습 시각 (t0 / eat_t0)
@@ -109,7 +107,8 @@ CASAS 는 먹기 라벨을 다 붙이지 않아 (Aruba `Eating` 은 219일 중 1
 
 ```text
 수면 기록 (CASAS 라벨 / Context Engine sleep_start · sleep_end)
-  ↓ merge_sessions      화장실 등으로 끊긴 구간 병합 (간격 ≤ 15분 또는 Bed_to_Toilet)
+  ↓ merge_sessions      끊긴 구간 병합: 간격 ≤ 15분, CASAS Bed_to_Toilet, 또는
+                        Context Engine awake_areas 가 화장실뿐이거나 비어 있음 (간격 무관)
   ↓ drop_implausible    24시간 이상은 기록 오류로 제외
   ↓ classify_sessions   정오~다음 날 정오마다 가장 긴 수면 = 밤잠, 나머지 = 낮잠
   ↓ night_samples       밤잠의 시작 → sleep_time, 끝 → wake_time
@@ -119,15 +118,19 @@ CASAS 는 먹기 라벨을 다 붙이지 않아 (Aruba `Eating` 은 219일 중 1
 - 기상이 관측되지 않은 수면(기록 종료 등)은 취침 시각만 학습합니다.
 - 알려진 한계: 그 밤의 수면 기록이 없으면 오후 낮잠이 밤잠으로 분류됩니다 (CASAS 6명 631밤 중 1건).
 
-Context Engine 은 수면 시작·끝을 t0 로그에 따로 남깁니다 (meal / wake / hydration 과 같은 형식, `t0` 는 epoch):
+Context Engine 은 수면 시작·끝을 t0 로그에 따로 남깁니다 (meal 과 같은 형식, `t0` 는 epoch):
 
 ```json
-{"date": "2026-09-01", "type": "sleep_start", "t0": 1788271200, "area": "bedroom", "source": "sensor", "prompted": false, "duration_sec": 0}
+{"date": "2026-09-01", "type": "sleep_start", "t0": 1788271200, "area": "bedroom", "awake_areas": ["bathroom"], "source": "sensor", "prompted": false, "duration_sec": 0}
 {"date": "2026-09-02", "type": "sleep_end",   "t0": 1788300000, "source": "sensor", "prompted": false, "duration_sec": 0}
 ```
 
 - 시각 순으로 `sleep_start` 와 다음 `sleep_end` 를 짝짓습니다. 끝이 없는 시작은 기상 미관측(취침만 학습), 시작이 없는 끝은 버립니다.
 - `area` 는 저장만 하고 밤잠 / 낮잠 판단에는 쓰지 않습니다.
+- **수면 잇기 (`awake_areas`)**: `sleep_start.awake_areas` 는 직전 `sleep_end` 뒤 깨어 있는 동안 들른 구역입니다
+  (다시 잠든 구역 제외, `null` = 모름). 화장실만 다녀왔거나(`["bathroom"]`) 잠든 구역을 떠나지 않았으면(`[]`)
+  **간격과 관계없이 같은 수면**으로 잇습니다 (`RESUME_AREAS`). 새벽에 1~2시간 깨어 있다 다시 잔 것도 하룻밤이 됩니다.
+  주방·거실 등에 다녀왔거나 모르면 간격 규칙(15분)을 따릅니다. 잇는 방향으로만 쓰므로 15분 이내 간격은 늘 같은 수면입니다.
 - **wake_time 출처**: 기상이 관측된 밤잠이 있으면 그 `sleep_end` 를 쓰고 `wake` 레코드는 쓰지 않습니다 (같은 기상을 두 번 학습하지 않도록). 없으면 `wake` 레코드를 씁니다.
 
 ## 실행
@@ -138,9 +141,8 @@ Context Engine 은 수면 시작·끝을 t0 로그에 따로 남깁니다 (meal 
 # 기본: Aruba breakfast CSV (meal_time만)
 python3 services/learning-engine/baseline.py
 
-# 개발용 4개 분포: Aruba 원본 + synthetic hydration
-python3 services/learning-engine/baseline.py \
-    --aruba-raw data/raw/casas/aruba/aruba.txt --synthetic-hydration
+# 개발용 3개 분포: Aruba 원본 (meal / sleep·wake proxy)
+python3 services/learning-engine/baseline.py --aruba-raw data/raw/casas/aruba/aruba.txt
 
 # Context Engine t0 로그
 python3 services/learning-engine/baseline.py --t0-jsonl /data/hestia/t0_log.jsonl
@@ -156,7 +158,7 @@ python3 services/learning-engine/baseline.py --t0-jsonl /tmp/t0_export/aruba_R1_
 python3 services/learning-engine/debug_kde_query.py --time 09:40
 
 # hestia/model/kde payload 확인 / 발행 (QoS 1, retained)
-# 입력 옵션(--t0-jsonl / --aruba-raw / --synthetic-hydration)은 baseline.py와 같다
+# 입력 옵션(--t0-jsonl / --aruba-raw / --meal-source)은 baseline.py와 같다
 python3 services/learning-engine/model_payload.py
 python3 services/learning-engine/mqtt_publisher.py --host <broker> --port 1883
 ```
@@ -181,7 +183,7 @@ Python 3.9 이상. Context Engine 계약 테스트는 Python 3.11 이상에서�
 ```bash
 # RPi4: 학습 → 발행
 python3 services/learning-engine/mqtt_publisher.py --host <broker> \
-    --aruba-raw data/raw/casas/aruba/aruba.txt --synthetic-hydration
+    --aruba-raw data/raw/casas/aruba/aruba.txt
 
 # 어디서든: retained 모델 수신·검증 (sleep_time / wake_time 필수)
 python3 services/learning-engine/verify_model.py --host <broker>
@@ -202,8 +204,7 @@ mosquitto_pub -h <broker> -t hestia/model/kde -r -n
 predictability = 1 - H / H_max        (0 ~ 1, 높을수록 규칙적)
 ```
 
-`H_max`는 격자 칸 수 기준입니다 (시각 분포 ln 96, hydration ln 24).
-칸 수가 다르므로 `hydration_lag`와 시각 분포의 값을 직접 비교하지 않습니다.
+`H_max`는 격자 칸 수 기준입니다 (15분 × 96칸 → ln 96).
 
 검증 결과는 [`results/predictability.md`](results/predictability.md)에 있습니다.
 

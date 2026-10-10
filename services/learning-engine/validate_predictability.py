@@ -7,8 +7,7 @@ predictability = 1 - H / H_max 가 규칙성을 제대로 표현하는지 확인
     1. time-of-day synthetic sweep (std 10 ~ 120분)
     2. 표본 수에 따른 변화
     3. Aruba 실제 데이터 (meal / breakfast / wake·sleep proxy)
-    4. hydration_lag regular / irregular (synthetic)
-    5. CASAS 거주자별 sleep / wake (Aruba / Milan / Tulum2 / Cairo, proxy)
+    4. CASAS 거주자별 sleep / wake (Aruba / Milan / Tulum2 / Cairo, proxy)
 
 seed를 고정하므로 같은 환경에서 다시 돌리면 같은 표가 나온다.
 임계값(policy.toml)은 바꾸지 않는다. 결과는 판단 근거로만 쓴다.
@@ -30,7 +29,6 @@ import numpy as np
 
 from baseline import (
     DATA_PATH,
-    HYDRATION_GRID_MAX_MIN,
     calculate_entropy,
     calculate_predictability,
     fit_distribution,
@@ -38,8 +36,7 @@ from baseline import (
     load_aruba_samples,
     unwrap_circular,
 )
-from samples import is_time_of_day, values
-from synthetic import generate_hydration_lag
+from samples import values
 
 
 RAW_PATH = Path("data/raw/casas/aruba/aruba.txt")
@@ -50,11 +47,6 @@ SWEEP_CENTER = 7 * 60 + 30           # 07:30
 SWEEP_DAYS = 212                     # Aruba breakfast 일수
 SAMPLE_SIZES = (14, 30, 60, 212)     # 14 = activity.baseline.min_sample_days
 SAMPLE_SIZE_STDS = (30, 60)
-HYDRATION_DAYS = 60
-HYDRATION_CASES = (
-    ("regular", 15, 5),
-    ("irregular", 15, 30),
-)
 DEFAULT_SEEDS = 20
 
 
@@ -88,7 +80,7 @@ def measure(distribution: str, data: np.ndarray) -> Measure:
 
     _, density = fit_distribution(distribution, data)
 
-    spread = unwrap_circular(data) if is_time_of_day(distribution) else data
+    spread = unwrap_circular(data)
 
     return Measure(
         actual_std=float(np.std(spread)),
@@ -213,27 +205,6 @@ def aruba_rows(
     return rows, None
 
 
-def hydration_rows(seeds: int = DEFAULT_SEEDS) -> list[Row]:
-    rows = []
-
-    for label, mean, std in HYDRATION_CASES:
-        runs = []
-
-        for seed in range(seeds):
-            data = values(
-                generate_hydration_lag(
-                    HYDRATION_DAYS, mean, std, seed=seed, max_min=HYDRATION_GRID_MAX_MIN,
-                )
-            )
-            runs.append(measure("hydration_lag", data))
-
-        rows.append(
-            summarize(f"{label} (mean {mean})", "hydration_lag", runs, HYDRATION_DAYS, std)
-        )
-
-    return rows
-
-
 def casas_rows(raw_dir: Path | None) -> tuple[list[dict], str | None]:
     """
     CASAS 거주자별 실제 sleep / wake predictability.
@@ -327,10 +298,8 @@ def render(
     midnight = midnight_check(seeds)
     aruba, aruba_note = aruba_rows(raw_path, breakfast_path)
     people, casas_note = casas_rows(raw_path.parent if raw_path is not None else None)
-    hydration = hydration_rows(seeds)
 
     h_day = math.log(grid_for("meal_time").size)
-    h_hyd = math.log(grid_for("hydration_lag").size)
 
     parts = [
         "# Predictability 검증 결과",
@@ -339,8 +308,6 @@ def render(
         "",
         "- 정의: `predictability = 1 - H / H_max`",
         f"- 시각 분포: 15분 96칸, circular KDE, H_max = ln 96 = {h_day:.3f}",
-        f"- hydration_lag: 5분 {grid_for('hydration_lag').size}칸 (0~{HYDRATION_GRID_MAX_MIN}분), "
-        f"직선 KDE, H_max = ln {grid_for('hydration_lag').size} = {h_hyd:.3f}",
         f"- synthetic 은 seed 0~{seeds - 1} ({seeds}회) 평균 ± 표준편차",
         "- bandwidth 는 gaussian_kde 기본값(Scott)",
         "",
@@ -376,17 +343,7 @@ def render(
         parts += [f"> {aruba_note}", ""]
 
     parts += [
-        "## 4. hydration_lag regular / irregular (synthetic)",
-        "",
-        f"n = {HYDRATION_DAYS}, 0~{HYDRATION_GRID_MAX_MIN}분 밖은 재추출. "
-        "재추출로 분포가 비대칭이 되어 실제 std 가 지정 std 와 다르다.",
-        "",
-        table(hydration),
-        "",
-        "> hydration_lag 는 칸 수(24)가 시각 분포(96)와 달라 H_max 가 다르다. "
-        "predictability 값을 시각 분포와 직접 비교하지 않는다.",
-        "",
-        "## 5. CASAS 거주자별 sleep / wake (proxy)",
+        "## 4. CASAS 거주자별 sleep / wake (proxy)",
         "",
         "Aruba 한 사람만으로는 규칙적 / 불규칙한 사람의 차이를 실제 데이터로 볼 수 없어 "
         "다른 CASAS 데이터셋의 거주자를 더했다. 밤마다 가장 긴 수면을 밤잠으로 골라 "

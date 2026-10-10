@@ -38,12 +38,12 @@ MEAL_SOURCES = ("t0", "eat_t0")
 MEAL_SOURCE = "t0"
 
 # t0 JSONL의 type → KDE distribution 이름
-# 현재 hestia/log/t0 명세의 type은 meal / wake / hydration 뿐이다.
+# hydration 은 KDE 대상이 아니다 (팀 결정 — Context Engine HYDRATION_PROMPT 는 간격 규칙).
+# sleep_start / sleep_end 는 짝지어야 해서 sleep_sessions 가 따로 처리한다.
 # sleep t0는 팀 합의 전이므로 매핑하지 않는다 (sleep_time은 Aruba proxy로 학습).
 TYPE_TO_DISTRIBUTION = {
     "wake": "wake_time",
     "meal": "meal_time",
-    "hydration": "hydration_lag",
 }
 
 # Context Engine T0Entry와 같은 필드
@@ -61,12 +61,6 @@ REQUIRED_FIELDS = (
 GRID_MIN = 0
 GRID_STEP = 15
 GRID_SIZE = 24 * 60 // GRID_STEP  # 96칸
-
-# hydration_lag 격자: 기상 후 0분부터 5분 간격 (MQTT 명세).
-# 끝값은 명세에 없다. Context Engine 은 기상 후 hydration_window_sec(7200초) 안의
-# 급수만 t0 로 남기므로 실제 hydration_lag 는 120분을 넘지 않는다.
-HYDRATION_GRID_STEP = 5
-HYDRATION_GRID_MAX_MIN = 120
 
 # meal_time 끼니(peaks) 거르기 — Context Engine MEAL 설계 합의값 (임시, 실데이터로 재검토).
 #
@@ -112,18 +106,13 @@ class Grid:
 TIME_OF_DAY_GRID = Grid(GRID_MIN, GRID_STEP, GRID_SIZE)
 
 
-def grid_for(
-    distribution: str,
-    hydration_max_min: float = HYDRATION_GRID_MAX_MIN,
-) -> Grid:
-    if kde_samples.is_time_of_day(distribution):
-        return TIME_OF_DAY_GRID
+def grid_for(distribution: str) -> Grid:
+    """distribution 의 격자. 모두 시각 분포라 15분 × 96칸이다."""
 
-    return Grid(
-        0,
-        HYDRATION_GRID_STEP,
-        int(hydration_max_min // HYDRATION_GRID_STEP),
-    )
+    if distribution not in kde_samples.DISTRIBUTION_KIND:
+        raise ValueError(f"알 수 없는 distribution: {distribution!r}")
+
+    return TIME_OF_DAY_GRID
 
 
 # 시각 분포의 주기 (분). 23:50과 00:10은 20분 차이다.
@@ -377,8 +366,7 @@ def t0_to_kde_sample(sample: T0Sample) -> KdeSample | None:
     t0 레코드 한 건 → KdeSample
     KDE 대상이 아닌 type이면 None.
 
-    - meal / wake: t0의 KST 자정 기준 분
-    - hydration  : duration_sec(기상 후 경과 시간)를 분으로 변환
+    t0 의 KST 자정 기준 분.
     """
 
     distribution = TYPE_TO_DISTRIBUTION.get(sample.type)
@@ -386,14 +374,9 @@ def t0_to_kde_sample(sample: T0Sample) -> KdeSample | None:
     if distribution is None:
         return None
 
-    if kde_samples.is_time_of_day(distribution):
-        value = t0_to_minutes(sample.t0)
-    else:
-        value = sample.duration_sec / 60
-
     return KdeSample(
         distribution=distribution,
-        value=value,
+        value=t0_to_minutes(sample.t0),
         date=sample.date,
         source=sample.source,
         prompted=sample.prompted,
@@ -493,7 +476,7 @@ def t0_records_to_kde_samples(
     """
     t0 로그 전체 → KdeSample.
 
-        meal / hydration          t0 adapter (t0_to_kde_samples)
+        meal / wake               t0 adapter (t0_to_kde_samples)
                                   meal 은 prepare_meal_records 로 먼저 거른다 (eat_t0 = null 제외 등)
         sleep_start / sleep_end   짝지어 수면 → 밤잠 / 낮잠 구분 → 밤잠만 sleep_time / wake_time
 
@@ -612,26 +595,21 @@ def build_density(
 def fit_distribution(
     distribution: str,
     values: np.ndarray,
-    hydration_max_min: float = HYDRATION_GRID_MAX_MIN,
     weights: np.ndarray | None = None,
 ) -> tuple[Grid, list[float]]:
     """
     distribution 하나의 공통 KDE fitting.
     출처와 무관하게 숫자 배열만 받는다.
 
-    - time_of_day (wake/sleep/meal): circular KDE. 1440분 주기.
-    - elapsed (hydration_lag): 직선 KDE. 경과 시간은 이어지지 않는다.
+    circular KDE (1440분 주기) — wake / sleep / meal 모두 시각 분포다.
 
     여기서 다루는 것은 fitting의 circularity뿐이다.
     개입용 tail probability의 circular 정의는 Context Engine
     model.tail_probability(wrap=...)의 미결 사항으로 남긴다.
     """
 
-    grid = grid_for(distribution, hydration_max_min)
+    grid = grid_for(distribution)
     values = np.asarray(values, dtype=float)
-
-    if not kde_samples.is_time_of_day(distribution):
-        return grid, build_density(fit_kde(values, weights), grid)
 
     # 펼치기 전에 개수·NaN 검증을 먼저 받는다.
     if len(values) < MIN_SAMPLES or not np.isfinite(values).all():
@@ -757,8 +735,7 @@ def calculate_predictability(
 
         predictability = 1 - H / H_max
 
-    H_max는 그 격자의 칸 수 기준이다 (시각 분포 96칸, hydration 24칸).
-    칸 수가 다르면 H_max가 달라 distribution 간 값을 직접 비교할 수 없다.
+    H_max는 그 격자의 칸 수 기준이다 (시각 분포 96칸 → ln 96).
 
     1에 가까울수록 규칙적,
     0에 가까울수록 불규칙.
@@ -781,7 +758,6 @@ def calculate_predictability(
 
 def build_model(
     samples: list[KdeSample] | None = None,
-    hydration_max_min: float = HYDRATION_GRID_MAX_MIN,
     sample_weighting: SampleWeighting | None = None,
     cold_start: ColdStart | None = None,
     meal_min_days_ratio: float | None = MEAL_MIN_DAYS_RATIO,
@@ -790,7 +766,7 @@ def build_model(
     """
     MQTT payload에 들어갈 KDE 모델 부분을 생성한다.
 
-    samples는 출처(Aruba / synthetic / t0)와 무관한 공통 KdeSample이다.
+    samples는 출처(CASAS / t0)와 무관한 공통 KdeSample이다.
     없으면 기존 Aruba breakfast 데이터(meal_time만)를 사용한다.
 
     표본이 없거나 KDE를 계산할 수 없는 distribution은 빼고 skipped에 이유를 남긴다.
@@ -829,7 +805,6 @@ def build_model(
             grid, density = fit_distribution(
                 name,
                 kde_samples.values(items),
-                hydration_max_min,
                 weights,
             )
         except InsufficientSamples as exc:
@@ -908,7 +883,7 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--t0-jsonl",
         type=Path,
-        help="Context Engine t0 JSONL 경로 (meal / wake / hydration / sleep_start / sleep_end)",
+        help="Context Engine t0 JSONL 경로 (meal / sleep_start / sleep_end, 이전 로그의 wake)",
     )
     parser.add_argument(
         "--aruba-raw",
@@ -921,21 +896,12 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         default=MEAL_SOURCE,
         help="meal_time 학습 시각: t0(식사 묶음 시작) / eat_t0(먹기 시작). 기본 t0",
     )
-    parser.add_argument(
-        "--synthetic-hydration",
-        action="store_true",
-        help="검증용 synthetic hydration_lag 추가",
-    )
-    parser.add_argument("--synthetic-days", type=int, default=60)
-    parser.add_argument("--synthetic-mean", type=float, default=15)
-    parser.add_argument("--synthetic-std", type=float, default=5)
-    parser.add_argument("--synthetic-seed", type=int, default=42)
 
 
 def samples_from_args(args) -> list[KdeSample] | None:
     """
     CLI 입력 조합. 아무 옵션도 없으면 None(기존 Aruba breakfast)이다.
-    --aruba-raw / --synthetic-hydration 은 개발·검증용이다.
+    --aruba-raw 는 개발·검증용이다.
     """
 
     collected: list[KdeSample] = []
@@ -949,17 +915,6 @@ def samples_from_args(args) -> list[KdeSample] | None:
         for series in extract_samples(args.aruba_raw, meal_source=args.meal_source).values():
             collected += series
 
-
-    if args.synthetic_hydration:
-        from synthetic import generate_hydration_lag
-
-        collected += generate_hydration_lag(
-            sample_days=args.synthetic_days,
-            mean_min=args.synthetic_mean,
-            std_min=args.synthetic_std,
-            seed=args.synthetic_seed,
-            max_min=HYDRATION_GRID_MAX_MIN,
-        )
 
     return collected or None
 

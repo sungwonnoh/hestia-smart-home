@@ -1,4 +1,4 @@
-"""v2 Phase 6 — circular KDE (wake / sleep / meal). hydration_lag 은 직선."""
+"""v2 Phase 6 — circular KDE (wake / sleep / meal)."""
 
 from pathlib import Path
 
@@ -100,14 +100,6 @@ def test_normalization_kept(center):
     _, density = fit_distribution("wake_time", normal_on_clock(center, 45))
     assert sum(density) == pytest.approx(1.0)
     assert min(density) >= 0
-
-
-def test_hydration_is_not_circular():
-    """경과 시간은 이어지지 않는다 — 0분 근처 표본이 120분 쪽으로 넘어가면 안 된다."""
-    values = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-    _, density = fit_distribution("hydration_lag", values)
-    assert density == pytest.approx(linear_density("hydration_lag", values), abs=1e-15)
-    assert density[-1] < 1e-6
 
 
 # ============================================================ Aruba

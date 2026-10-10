@@ -68,10 +68,10 @@ def test_wake_mapping():
     assert (k.distribution, k.value) == ("wake_time", pytest.approx(405))
 
 
-def test_hydration_mapping_uses_duration():
-    """hydration 은 t0(시각)가 아니라 기상 후 경과(duration_sec)다."""
-    [k] = t0_to_kde_samples([parse_t0_record(t0_record(0, "hydration", 7 * 60 + 11, duration_sec=660))])
-    assert (k.distribution, k.value) == ("hydration_lag", 11.0)
+def test_hydration_is_not_learned():
+    """hydration_lag 는 팀 결정으로 KDE 에서 뺐다 — Context Engine 이 남기는 hydration t0 는 제외."""
+    records = [parse_t0_record(t0_record(0, "hydration", 7 * 60 + 11, duration_sec=0))]
+    assert t0_to_kde_samples(records) == []
 
 
 def test_sleep_is_not_mapped():
@@ -84,7 +84,7 @@ def test_unknown_type_is_safe(caplog):
     records = [parse_t0_record(t0_record(0, "medication", 9 * 60))] + t0_days(3)
     with caplog.at_level(logging.INFO):
         converted = t0_to_kde_samples(records)
-    assert len(converted) == 9
+    assert len(converted) == 6                      # 3일 × (wake + meal), hydration 은 제외
     assert "medication" in caplog.text
 
 
@@ -92,11 +92,11 @@ def test_unknown_type_is_safe(caplog):
 
 
 def test_gate_d_t0_to_payload():
-    """Gate D: meal / wake / hydration t0 → 기존 KDE fitting → payload"""
+    """Gate D: meal / wake t0 → 기존 KDE fitting → payload (hydration t0 는 섞여 있어도 제외)"""
     samples = t0_to_kde_samples(t0_days(21))
     model = build_model(samples)
 
-    assert list(model["distributions"]) == ["wake_time", "meal_time", "hydration_lag"]
+    assert list(model["distributions"]) == ["wake_time", "meal_time"]
     assert model["skipped"] == {"sleep_time": "표본 없음"}
     assert model["sample_days"] == 21
     assert {m["sources"][0] for m in model["meta"].values()} == {"sensor"}
@@ -106,8 +106,7 @@ def test_gate_d_t0_to_payload():
 
     wake = payload["distributions"]["wake_time"]["density"]
     assert max(range(96), key=wake.__getitem__) in (27, 28)          # 06:45~07:15
-    lag = payload["distributions"]["hydration_lag"]["density"]
-    assert max(range(24), key=lag.__getitem__) in (1, 2, 3)          # 5~20분
+    assert "hydration_lag" not in payload["distributions"]
 
 
 def test_gate_d_with_sleep_and_unknown_records():
@@ -200,9 +199,10 @@ def test_wake_records_kept_if_no_observed_night_wake():
 def test_gate_d_with_sleep_events_to_payload():
     from baseline import t0_records_to_kde_samples
     meals = [t0_record(d, "meal", 8 * 60 + d, duration_sec=1500) for d in range(14)]
-    hyd = [t0_record(d, "hydration", 7 * 60 + 12, duration_sec=720 + d * 30) for d in range(14)]
+    hyd = [t0_record(d, "hydration", 7 * 60 + 12, duration_sec=0) for d in range(14)]
     payload = build_kde_payload(build_model(t0_records_to_kde_samples(meals + hyd + sleep_events(14))))
     validate_kde_payload(payload, require_all=True)
+    assert list(payload["distributions"]) == ["wake_time", "sleep_time", "meal_time"]
 
 
 @pytest.mark.parametrize("duration", ["missing", None, 0, 31.5])

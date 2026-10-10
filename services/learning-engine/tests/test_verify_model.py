@@ -6,21 +6,21 @@ import pytest
 
 import verify_model
 from baseline import build_model
-from kde_fixtures import four_distributions
+from kde_fixtures import all_distributions
 from model_payload import PayloadError, build_kde_payload, to_json
 from samples import KdeSample
 
 
 @pytest.fixture(scope="module")
 def payload():
-    return build_kde_payload(build_model(four_distributions()))
+    return build_kde_payload(build_model(all_distributions()))
 
 
 def test_check_payload_ok(payload):
     summary = verify_model.check_payload(to_json(payload).encode("utf-8"))
     assert summary["missing"] == []
     assert summary["distributions"]["sleep_time"]["bins"] == 96
-    assert summary["distributions"]["hydration_lag"]["bins"] == 24
+    assert "hydration_lag" not in summary["distributions"]
     assert summary["distributions"]["wake_time"]["sum"] == pytest.approx(1.0)
 
 
