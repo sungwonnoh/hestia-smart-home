@@ -10,6 +10,7 @@ import 'package:hestia_flutter_test/models/home_setup.dart';
 import 'package:hestia_flutter_test/models/medication.dart';
 import 'package:hestia_flutter_test/models/room.dart';
 import 'package:hestia_flutter_test/models/user_preferences.dart';
+import 'package:hestia_flutter_test/models/weather.dart';
 import 'package:hestia_flutter_test/repositories/api_hestia_repository.dart';
 import 'package:hestia_flutter_test/services/api_client.dart';
 
@@ -48,6 +49,7 @@ void main() {
   final rawContext = _response('context_current');
   final rawExplanation = _response('explanation_by_id');
   final rawMedications = _responseList('medications');
+  final rawWeather = _response('weather');
   final notificationId = rawNotifications.first['id'] as String;
   final explanationId = rawExplanation['id'] as String;
 
@@ -69,7 +71,8 @@ void main() {
       ..['PUT /api/v1/setup'] = (200, rawSetup)
       ..['PUT /api/v1/preferences'] = (200, rawPreferences)
       ..['GET /api/v1/medications'] = (200, rawMedications)
-      ..['POST /api/v1/medications'] = (201, rawMedications.first);
+      ..['POST /api/v1/medications'] = (201, rawMedications.first)
+      ..['GET /api/v1/weather'] = (200, rawWeather);
     repo = ApiHestiaRepository(
       ApiClient(baseUrl: 'http://127.0.0.1:${api.port}'),
     );
@@ -202,6 +205,28 @@ void main() {
         expect(Medication.formatDate(m.endDate!), raw['endDate']);
         expect(m.refillRequired, raw['refillRequired']);
       }
+    });
+
+    test('weather: 값·강수형태·특보가 그대로 들어온다', () async {
+      final w = (await repo.getWeather())!;
+      expect(w.locationName, rawWeather['locationName']);
+      expect(w.observedAt,
+          DateTime.parse(rawWeather['observedAt'] as String).toLocal());
+      expect(w.temperatureC, rawWeather['temperatureC']);
+      expect(w.humidityPct, rawWeather['humidityPct']);
+      expect(w.precipitationMm, rawWeather['precipitationMm']);
+      // 모르는 값이 unknown으로 떨어지지 않았는지 원본과 비교한다.
+      expect(w.precipType, isNot(PrecipType.unknown));
+      expect(w.precipType.wireName, rawWeather['precipType']);
+      expect(w.windSpeedMs, rawWeather['windSpeedMs']);
+      expect(w.stale, rawWeather['stale']);
+      expect(w.warnings!.map((x) => x.toJson()), rawWeather['warnings']);
+      expect(WeatherLabels.details(w), isNotEmpty);
+    });
+
+    test('weather: 아직 못 받았으면(404) null', () async {
+      api.routes.remove('GET /api/v1/weather');
+      expect(await repo.getWeather(), isNull);
     });
 
     test('ack: 응답을 받아도 예외가 없다', () async {

@@ -1,0 +1,18 @@
+[project]
+name = "hestia-weather"
+version = "0.1.0"
+description = "HESTIA 외부 날씨 — 기상청 초단기실황을 hestia/external/weather 로 발행 (RPi4)"
+requires-python = ">=3.9"
+dependencies = [
+    "paho-mqtt>=2.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["hestia_weather"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

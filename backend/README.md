@@ -60,6 +60,7 @@ API 문서: http://localhost:8000/docs
 | GET/PUT | `/api/v1/setup` | 최초 설정 (설정 전 GET 은 404) |
 | GET/POST | `/api/v1/medications` | 복약 일정 조회/추가 (추가는 201) |
 | PUT/DELETE | `/api/v1/medications/{id}` | 복약 일정 수정/삭제 (없으면 404, 삭제는 204) |
+| GET | `/api/v1/weather` | 외부 날씨 최신값 (아직 못 받았으면 404) |
 | WS | `/ws/monitor` | 접속 시 `snapshot`, 이후 MQTT 이벤트 실시간 전달 |
 
 ### 가전 ↔ MQTT 장치 연결
@@ -101,6 +102,26 @@ MQTT 에 (재)연결될 때도 다시 발행하므로 브로커가 꺼져 있던
 
 `medications` 항목은 다른 MQTT 메시지처럼 snake_case 다. REST 의 `refillRequired` 는
 `refill_notice` (남은 일수가 적을 때 처방 안내가 필요한 약)로 보낸다. 형식을 바꾸면 `version` 을 올린다.
+
+### 외부 날씨 (`/weather`)
+
+RPi4 weather 서비스(`services/weather`)가 기상청 초단기실황·기상특보를 `hestia/external/weather` 로 보낸다.
+retained 가 아니므로 Backend 는 MQTT 에 (재)연결될 때마다 `hestia/external/weather/get` 을 보내 최신 값을 받는다.
+더 오래된 관측이 늦게 와도 덮어쓰지 않는다.
+
+```json
+{"locationName": "서울", "observedAt": "2026-10-10T12:00:00+09:00",
+ "temperatureC": 31.2, "humidityPct": 58.0, "precipitationMm": 0.0, "precipType": "NONE",
+ "windSpeedMs": 1.8, "warnings": [{"name": "폭염경보", "type": "HEAT", "level": "WARNING"}],
+ "stale": false}
+```
+
+| 필드 | 의미 |
+|---|---|
+| `observedAt` | 기상청 관측 정시. 관측은 1시간에 한 번이다 |
+| `precipitationMm` | 1시간 강수량 (MQTT `precip_1h_mm`) |
+| `warnings` | 집 구역에 발효 중인 특보. `[]` = 없음, `null` = 아직 모름 |
+| `stale` | 관측이 90분보다 오래됨 — RPi4 갱신이 끊겼을 수 있다 |
 
 ### 알림 변환 (`hestia/notify/push` → Notification)
 
@@ -180,9 +201,10 @@ Backend 는 Context Engine 이 발행한 context/notify 를 변환·저장·전�
 
 `hestia/sensor/+/state`, `hestia/device/+/state`, `hestia/device/+/event`, `hestia/context/+`,
 `hestia/model/+`, `hestia/notify/push`, `hestia/notify/ack`, `hestia/notify/cancel`, `hestia/intervention/outcome`,
-`hestia/registry/devices`, `hestia/system/profile`
+`hestia/registry/devices`, `hestia/system/profile`, `hestia/external/weather`
 
-발행: `hestia/notify/ack` (retain 하지 않음), `hestia/registry/medications` (retained)
+발행: `hestia/notify/ack` (retain 하지 않음), `hestia/registry/medications` (retained),
+`hestia/external/weather/get` ((재)연결 시, retain 하지 않음)
 
 잘못된 JSON, schema 위반, 토픽과 `src_id` 불일치는 버리고 `/health` 의 `ingest` 통계에 센다.
 

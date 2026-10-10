@@ -6,6 +6,7 @@ import '../models/medication.dart';
 import '../models/notification_item.dart';
 import '../models/room.dart';
 import '../models/user_preferences.dart';
+import '../models/weather.dart';
 
 /// UI와 서버 사이의 경계.
 ///
@@ -53,4 +54,7 @@ abstract interface class HestiaRepository {
   Future<Medication> updateMedication(Medication medication);
 
   Future<void> deleteMedication(String medicationId);
+
+  /// RPi4가 보낸 바깥 날씨. 아직 받지 못했으면 null.
+  Future<Weather?> getWeather();
 }

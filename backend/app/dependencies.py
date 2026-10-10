@@ -20,6 +20,7 @@ from .services.medication_service import MedicationService
 from .services.monitor_service import MonitorHub
 from .services.mqtt_service import MqttService, NullMqttService
 from .services.notification_service import NotificationService
+from .services.weather_service import WeatherService
 
 
 @dataclass
@@ -36,6 +37,7 @@ class Container:
     explanations: ExplanationService
     monitor: MonitorHub
     ingest: IngestService
+    weather: WeatherService
     mqtt: Any  # MqttService | NullMqttService | 테스트용 가짜
 
 
@@ -55,10 +57,13 @@ def build_container(settings: Settings, mqtt: Any = None) -> Container:
     devices = DeviceService(device_repo, cache, settings.device_stale_sec)
     notifications = NotificationService(history, mqtt, settings.src_id,
                                         area_of=cache.registry_area)
-    ingest = IngestService(cache, history, devices, notifications, monitor)
+    weather = WeatherService(mqtt, settings.src_id)
+    ingest = IngestService(cache, history, devices, notifications, monitor, weather)
     mqtt.set_handler(ingest.handle)
     medications = MedicationService(MedicationRepository(db), mqtt, settings.src_id)
     mqtt.add_on_connect(medications.publish_schedule)
+    # 날씨는 retained 가 아니다. (재)연결될 때마다 RPi4 에 최신 값을 요청한다
+    mqtt.add_on_connect(weather.request)
     return Container(
         settings=settings,
         db=db,
@@ -72,6 +77,7 @@ def build_container(settings: Settings, mqtt: Any = None) -> Container:
         explanations=ExplanationService(history),
         monitor=monitor,
         ingest=ingest,
+        weather=weather,
         mqtt=mqtt,
     )
 

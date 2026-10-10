@@ -9,6 +9,7 @@ import '../models/medication.dart';
 import '../models/notification_item.dart';
 import '../models/room.dart';
 import '../models/user_preferences.dart';
+import '../models/weather.dart';
 import 'hestia_repository.dart';
 
 /// 시연/개발용 조작. Mock 구현체만 제공한다.
@@ -289,6 +290,25 @@ class MockHestiaRepository implements HestiaRepository, DemoControls {
       startDate: start,
       endDate: DateTime(start.year, start.month, start.day + m.days - 1),
       refillRequired: m.refillRequired,
+    );
+  }
+
+  // ---------------------------------------------------------------- weather
+
+  /// RPi4 weather 서비스가 보내는 형태의 서울 날씨. 관측은 이번 정시.
+  @override
+  Future<Weather?> getWeather() async {
+    await _respond();
+    final now = _clock();
+    return Weather(
+      locationName: '서울',
+      observedAt: DateTime(now.year, now.month, now.day, now.hour),
+      temperatureC: 24.1,
+      humidityPct: 61,
+      precipitationMm: 0,
+      precipType: PrecipType.none,
+      windSpeedMs: 1.8,
+      warnings: const [],
     );
   }
 

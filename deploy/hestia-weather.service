@@ -1,0 +1,18 @@
+[Unit]
+Description=HESTIA Weather (RPi4) — 기상청 초단기실황·기상특보 → hestia/external/weather
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# KMA_SERVICE_KEY, MQTT_HOST(RPi5) 등. repo 밖에 둔다 — deploy/weather.env.example 참고
+EnvironmentFile=/etc/hestia/weather.env
+ExecStart=/usr/bin/python3 -m hestia_weather.runner
+Restart=always
+RestartSec=5
+# 브로커(RPi5)가 늦게 떠도 connect_async 가 재시도하므로 의존을 강제하지 않는다
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
