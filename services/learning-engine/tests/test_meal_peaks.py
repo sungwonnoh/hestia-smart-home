@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from baseline import MEAL_MIN_DAYS_RATIO, build_model, calculate_predictability, fit_distribution, meal_peaks
+from baseline import MEAL_MAX_MEALS_PER_DAY, MEAL_MIN_DAYS_RATIO, build_model, calculate_predictability, fit_distribution, meal_peaks
 from meal_slots import find_peaks, slot_ranges
 from model_payload import PayloadError, build_kde_payload, to_json, validate_kde_payload
 from samples import KdeSample
@@ -86,7 +86,7 @@ def test_sparse_slot_predictability_is_null():
     density[70] += 0.4
     density /= density.sum()
     values = np.array([450.0, 455.0, 460.0, 1050.0])         # 두 번째 끼니에는 1개
-    peaks, _ = meal_peaks(values, density.tolist(), min_days_ratio=None)
+    peaks, _ = meal_peaks(values, density.tolist(), min_days_ratio=None, max_meals_per_day=None)
     assert len(peaks) == 2
     assert peaks[0]["predictability"] is not None
     assert peaks[1]["predictability"] is None
@@ -127,14 +127,48 @@ def daily_meals(slots, days=20, seed=0):
 
 
 def test_days_ratio_and_meals_per_day():
-    model = build_model(daily_meals([(450, 10, 40, 1), (750, 10, 28, 1), (1110, 10, 40, 2)], days=40))
+    model = build_model(daily_meals([(450, 10, 40, 1), (750, 10, 28, 1), (1110, 10, 40, 2)], days=40),
+                        meal_min_days_ratio=None, meal_max_meals_per_day=None)
     peaks = model["distributions"]["meal_time"]["peaks"]
     assert [round(p["days_ratio"], 2) for p in peaks] == [1.0, 0.7, 1.0]
     assert [round(p["meals_per_day"], 2) for p in peaks] == [1.0, 0.7, 2.0]
 
 
-def test_default_threshold_is_majority():
-    assert MEAL_MIN_DAYS_RATIO == 0.5
+def test_default_thresholds():
+    """Context Engine MEAL 설계 합의값 (임시)."""
+    assert (MEAL_MIN_DAYS_RATIO, MEAL_MAX_MEALS_PER_DAY) == (0.5, 1.5)
+
+
+def test_merged_peak_is_not_sent():
+    """두 끼가 한 봉우리로 합쳐지면(meals_per_day ≈ 2) 보내지 않는다 — 뒤 끼니 거름을 못 잡기 때문."""
+    samples = daily_meals([(450, 10, 40, 1), (1110, 10, 40, 2)], days=40)
+    model = build_model(samples)
+    peaks = model["distributions"]["meal_time"]["peaks"]
+    assert len(peaks) == 1 and abs(peaks[0]["center"] - 450) <= 30
+    [dropped] = model["meta"]["meal_time"]["meal_peaks_dropped"]
+    assert dropped["meals_per_day"] == 2.0 and dropped["reason"] == ["meals_per_day > 1.5"]
+
+
+def test_meals_per_day_boundary_is_kept():
+    density = np.full(96, 0.2 / 96)
+    density[30] += 0.4
+    density[70] += 0.4
+    density /= density.sum()
+    values = np.array([450.0, 452.0, 455.0, 1050.0, 1055.0])
+    dates = ["d1", "d1", "d2", "d1", "d2"]                          # 아침 3끼 / 2일 = 1.5
+    peaks, dropped = meal_peaks(values, density.tolist(), dates=dates, min_days_ratio=None)
+    assert [p["meals_per_day"] for p in peaks] == [1.5, 1.0] and dropped == []
+
+
+def test_both_reasons_recorded():
+    density = np.full(96, 0.2 / 96)
+    density[30] += 0.4
+    density[70] += 0.4
+    density /= density.sum()
+    values = np.array([450.0, 452.0, 455.0, 1050.0, 1052.0])
+    dates = ["d1", "d1", "d1", "d1", "d2"]                          # 아침: 1일 / 2일 = 0.5, 3끼 / 2일 = 1.5
+    _, dropped = meal_peaks(values, density.tolist(), dates=dates, min_days_ratio=0.8, max_meals_per_day=1.4)
+    assert dropped[0]["reason"] == ["days_ratio < 0.8", "meals_per_day > 1.4"]
 
 
 def test_rare_meal_is_not_sent_and_its_hours_stay_empty():
@@ -280,10 +314,14 @@ def test_cairo_per_meal_predictability():
               if e.kind == "begin"]
     samples = [KdeSample("meal_time", e.ts.hour * 60 + e.ts.minute + e.ts.second / 60,
                          e.ts.date().isoformat(), "cairo") for e in events]
-    model = build_model(samples)
+    model = build_model(samples, meal_min_days_ratio=None, meal_max_meals_per_day=None)
     peaks = model["distributions"]["meal_time"]["peaks"]
     assert len(peaks) == 3
     assert model["predictability"]["meal_time"] < 0.1                      # 전체는 다봉이라 낮다
     assert [round(p["predictability"], 2) for p in peaks] == [0.41, 0.54, 0.65]
     assert [round(p["days_ratio"], 2) for p in peaks] == [0.87, 0.67, 0.76]
     assert [round(p["meals_per_day"], 2) for p in peaks] == [0.87, 0.67, 0.76]
+
+    # 기본 거르기 (days_ratio ≥ 0.5, meals_per_day ≤ 1.5) — 세 끼 모두 남는다
+    kept = build_model(samples)["distributions"]["meal_time"]["peaks"]
+    assert [round(p["days_ratio"], 2) for p in kept] == [0.87, 0.67, 0.76]

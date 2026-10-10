@@ -191,4 +191,4 @@ def test_gate_a_aruba_meal_sleep_wake():
     assert list(model["distributions"]) == ["wake_time", "sleep_time", "meal_time"]
     assert model["skipped"] == {"hydration_lag": "표본 없음"}
     assert model["meta"]["sleep_time"]["proxy"] is True
-    assert model["meta"]["meal_time"]["samples"] == 1606
+    assert model["meta"]["meal_time"]["samples"] == 1020          # Meal_Preparation 1606 → 식사 묶음 1020

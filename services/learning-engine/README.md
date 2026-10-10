@@ -39,11 +39,34 @@ synthetic.py  ─┼─→ KdeSample ─→ fit_distribution ─→ density + pr
 t0 adapter    ─┘
 ```
 
+## 식사: 학습 시각 (t0 / eat_t0)
+
+Context Engine meal 레코드는 식사 묶음 하나에 시각을 둘 남깁니다.
+
+| 끼니 | `t0` (묶음 시작) | `eat_t0` (EATING 판정) |
+|---|---|---|
+| 조리 후 먹음 | 인덕션 ON 09:20 | 09:45 |
+| 조리 없이 먹음 | 주방 진입 12:00 | 12:06 |
+| 조리만 하고 안 먹음 | 09:20 | `null` |
+
+- **`eat_t0 = null` 인 meal 은 학습에서 뺍니다** (식사가 아님)
+- `eat_t0` 필드가 아예 없는 레코드(이전 로그)는 판단할 수 없어 `t0` 로 학습합니다
+- `--meal-source t0|eat_t0` (기본 `t0`): `eat_t0` 로 학습하면 `eat_t0` 가 있는 레코드만 쓰고 날짜도 `eat_t0` 기준입니다.
+  어느 쪽으로 학습할지는 실데이터로 비교해 정합니다
+
+CASAS 개발 데이터도 같은 단위로 만듭니다 (`aruba.meal_sessions`).
+조리(`Meal_Preparation`)·먹기(`Eating`) 라벨을 Context Engine `fsm.meal` 규칙
+(10분 유예, 2분 미만 제외, 2시간 상한)으로 묶어 `t0` = 묶음 시작, `eat_t0` = 묶음 안 첫 먹기 시작.
+CASAS 는 먹기 라벨을 다 붙이지 않아 (Aruba `Eating` 은 219일 중 137일) 먹기 라벨이 없는 묶음은
+`null` 이 아니라 **`eat_t0` 필드 없음(모름)** 으로 둡니다. Aruba: 라벨 1606 → 식사 묶음 1020, 먹기 시각 있음 210.
+
 ## 식사: 끼니 구간 (meal_time peaks)
 
 `meal_time`은 하루 전체 식사(아침·점심·저녁) 분포라 봉우리가 여러 개입니다.
 전체 predictability는 규칙적인 사람도 낮게(0.07~0.11) 나와 판단 게이트로 쓸 수 없어서,
 끼니가 2개 이상이면 **끼니 구간과 끼니별 predictability**를 함께 보냅니다 (Context Engine 합의).
+
+아래는 CASAS Cairo 값입니다 (세 끼 모두 기본 기준을 통과).
 
 ```json
 "meal_time": {
@@ -65,11 +88,14 @@ t0 adapter    ─┘
 | `meals_per_day` | 그 구간 식사 수 / sample_days. 1보다 크면 구간에 끼니가 여럿이거나 한 끼가 쪼개져 기록됨 |
 
 - 끼니 = 발행하는 `meal_time` density 에서 균등분포(1/96)보다 높은 봉우리, 경계 = 봉우리 사이 최저점 (고정 식사 시각 없음)
-- **`days_ratio` < 0.5 인 끼니는 보내지 않습니다** (`MEAL_MIN_DAYS_RATIO`, 과반의 날에 먹어야 식사 습관).
-  그 시간대는 이웃 끼니에 합치지 않고 비워 둡니다 → Context Engine 은 그 시간대에 식사 판단을 하지 않음.
-  거른 끼니는 `meta.meal_time.meal_peaks_dropped` 에 남습니다
-- 알릴지 말지는 Context Engine 이 `days_ratio` 로 판단합니다. `days_ratio` p 인 끼니에 거름 알림을 하면
-  그 사람에게 정상인데도 1−p 의 날에 울립니다 (0.67 → 3일에 한 번, 0.86 → 일주일에 한 번)
+- **다음 끼니는 보내지 않습니다** (Context Engine MEAL 설계 합의값, 임시 — 실데이터로 재검토)
+  - `days_ratio` < 0.5 (`MEAL_MIN_DAYS_RATIO`): 과반의 날에 먹어야 식사 습관으로 본다.
+    구간 tail 은 구간 안에서 다시 정규화돼 빈도를 지운다. `days_ratio` p 인 끼니에 거름 알림을 하면
+    정상인데도 1−p 의 날에 울린다 (0.67 → 3일에 한 번, 0.86 → 일주일에 한 번)
+  - `meals_per_day` > 1.5 (`MEAL_MAX_MEALS_PER_DAY`): 두 끼가 골짜기 없이 이어져 한 봉우리가 된 경우.
+    보내면 앞 끼니를 먹은 것이 뒤 끼니의 "이미 먹음"이 되어 뒤 끼니 거름을 못 잡는다
+  - 그 시간대는 이웃 끼니에 합치지 않고 비워 둡니다 → Context Engine 은 그 시간대에 식사 판단을 하지 않음.
+    거른 끼니와 이유는 `meta.meal_time.meal_peaks_dropped` 에 남습니다
 - `days_ratio` / `meals_per_day` 는 가중치 없이 실제 횟수로 셉니다. sample_days 는 식사 기록이 있는 날만 셉니다
 - 봉우리가 1개 이하면 `peaks` 를 넣지 않습니다 → Context Engine 은 전체 predictability 사용.
   봉우리가 2개 이상이었으면 거른 뒤 1개면 1개, 0개면 `[]` 를 보냅니다
@@ -195,7 +221,7 @@ python3 services/learning-engine/validate_predictability.py \
 | Aruba | predictability |
 |---|---|
 | breakfast (212일) | 0.330 |
-| meal 전체 (1606건, 아침·점심·저녁) | 0.070 |
+| meal 전체 (식사 묶음 1020건, 아침·점심·저녁) | 0.064 |
 | wake_time (proxy) | 0.319 |
 | sleep_time (proxy) | 0.347 |
 

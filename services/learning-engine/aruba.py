@@ -36,6 +36,7 @@ from pathlib import Path
 
 from samples import KdeSample
 from sleep_sessions import (
+    KST,
     MERGE_GAP_MIN,
     NIGHT_ANCHOR_HOUR,
     ClassifiedSession,
@@ -56,6 +57,12 @@ log = logging.getLogger(__name__)
 RAW_PATH = Path("data/raw/casas/aruba/aruba.txt")
 
 MEAL_LABEL = "Meal_Preparation"
+EAT_LABEL = "Eating"
+
+# Context Engine fsm.meal 과 같은 식사 묶음 규칙 (config/policy.toml)
+MEAL_CLOSE_GRACE_SEC = 600          # 이만큼 안에 다시 시작하면 같은 식사
+MEAL_MIN_DURATION_SEC = 120         # 이보다 짧은 묶음은 식사로 보지 않는다
+MEAL_SESSION_TIMEOUT_SEC = 7200     # 한 묶음의 최대 길이
 SLEEP_LABEL = "Sleeping"
 TOILET_LABEL = "Bed_to_Toilet"
 
@@ -381,11 +388,27 @@ def extract_sleep(
 # ==================================================================== 식사
 
 
-def extract_meal(aruba_log: ArubaLog) -> list[KdeSample]:
+@dataclass(frozen=True)
+class MealSession:
     """
-    Meal_Preparation begin 전부.
+    Context Engine 식사 묶음과 같은 단위.
+
+    start      묶음 시작 = Context Engine meal t0 (조리 또는 먹기 중 먼저 시작한 시각)
+    eat_start  묶음 안 첫 먹기 시작 = Context Engine eat_t0. 먹기 라벨이 없으면 None
+               CASAS 에서 None 은 "모름"이다 — 라벨을 다 붙이지 않은 데이터셋이 있어
+               (Aruba Eating 은 219일 중 137일에만 있다) "안 먹음"으로 볼 수 없다.
+    """
+
+    start: datetime
+    end: datetime
+    eat_start: datetime | None
+
+
+def meal_label_begins(aruba_log: ArubaLog) -> list[KdeSample]:
+    """
+    Meal_Preparation begin 전부 (식사 묶음 이전 방식).
     scripts/datasets/parse_aruba.py 의 meal_preparation.csv 와 같은 집합이다.
-    아침 대표값 필터(breakfast)는 여기서 하지 않는다.
+    한 끼가 여러 라벨로 쪼개져 있어 HESTIA meal t0 와 단위가 다르다 — 회귀 비교용.
     """
 
     return [
@@ -395,10 +418,113 @@ def extract_meal(aruba_log: ArubaLog) -> list[KdeSample]:
     ]
 
 
+def meal_sessions(
+    events: list[ActivityEvent],
+    prep_label: str = MEAL_LABEL,
+    eat_label: str | None = EAT_LABEL,
+) -> list[MealSession]:
+    """
+    조리 / 먹기 라벨을 Context Engine fsm.meal 규칙으로 묶는다.
+
+      - 조리든 먹기든 먼저 시작한 쪽이 묶음 시작 (Context Engine open_states = COOKING, EATING)
+      - 앞 묶음이 끝나고 MEAL_CLOSE_GRACE_SEC 안에 다시 시작하면 같은 묶음
+        (단, 묶음 전체가 MEAL_SESSION_TIMEOUT_SEC 를 넘으면 새 묶음)
+      - MEAL_MIN_DURATION_SEC 보다 짧은 묶음은 버린다
+
+    CASAS 라벨은 한 끼에 여러 번 찍혀 (Tulum2 조리 라벨 하루 13회, 중앙값 1분)
+    그대로 쓰면 한 끼가 여러 번 세어진다.
+    """
+
+    segments = [(seg, False) for seg in pair_segments(events, prep_label)[0]]
+
+    if eat_label is not None:
+        segments += [(seg, True) for seg in pair_segments(events, eat_label)[0]]
+
+    segments.sort(key=lambda x: x[0].begin.ts)
+
+    grouped: list[list] = []
+
+    for seg, eating in segments:
+        b, e = seg.begin.ts, seg.end.ts
+
+        if grouped:
+            cur = grouped[-1]
+            within_grace = (b - cur[1]).total_seconds() <= MEAL_CLOSE_GRACE_SEC
+            within_timeout = (max(e, cur[1]) - cur[0]).total_seconds() <= MEAL_SESSION_TIMEOUT_SEC
+
+            if within_grace and within_timeout:
+                cur[1] = max(cur[1], e)
+                if eating and (cur[2] is None or b < cur[2]):
+                    cur[2] = b
+                continue
+
+        grouped.append([b, e, b if eating else None])
+
+    return [
+        MealSession(start, end, eat_start)
+        for start, end, eat_start in grouped
+        if (end - start).total_seconds() >= MEAL_MIN_DURATION_SEC
+    ]
+
+
+def extract_meal(aruba_log: ArubaLog, meal_source: str = "t0") -> list[KdeSample]:
+    """
+    식사 묶음 → meal_time 표본 (Context Engine meal t0 와 같은 단위).
+
+    meal_source
+      t0      묶음 시작 (조리 또는 먹기 중 먼저)
+      eat_t0  묶음 안 첫 먹기 시작. 먹기 라벨이 없는 묶음은 "모름"이라 뺀다
+    """
+
+    out = []
+
+    for m in meal_sessions(aruba_log.events):
+        if meal_source == "t0":
+            at = m.start
+        elif meal_source == "eat_t0":
+            if m.eat_start is None:
+                continue
+            at = m.eat_start
+        else:
+            raise ValueError(f"meal_source는 t0 / eat_t0: {meal_source!r}")
+
+        out.append(time_sample("meal_time", at.date().isoformat(), at, proxy=False))
+
+    return out
+
+
+def meal_records(sessions: list[MealSession], source: str) -> list[dict]:
+    """
+    식사 묶음 → Context Engine t0 로그 형식 meal 레코드.
+    먹기 시각을 모르는 묶음은 eat_t0 필드를 넣지 않는다 (null = 안 먹음과 구별).
+    """
+
+    def epoch(ts: datetime) -> float:
+        return round(ts.replace(tzinfo=KST).timestamp(), 3)
+
+    out = []
+
+    for m in sessions:
+        record = {
+            "date": m.start.date().isoformat(),
+            "type": "meal",
+            "t0": epoch(m.start),
+            "source": source,
+            "prompted": False,
+            "duration_sec": round((m.end - m.start).total_seconds(), 3),
+        }
+        if m.eat_start is not None:
+            record["eat_t0"] = epoch(m.eat_start)
+        out.append(record)
+
+    return out
+
+
 def extract_samples(
     path: Path = RAW_PATH,
     merge_gap_min: float = MERGE_GAP_MIN,
     anchor_hour: int = NIGHT_ANCHOR_HOUR,
+    meal_source: str = "t0",
 ) -> dict[str, list[KdeSample]]:
     """
     Aruba 원본 하나 → meal_time / sleep_time / wake_time 표본
@@ -406,13 +532,13 @@ def extract_samples(
 
     aruba_log = read_events(
         path,
-        {MEAL_LABEL, SLEEP_LABEL, TOILET_LABEL},
+        {MEAL_LABEL, EAT_LABEL, SLEEP_LABEL, TOILET_LABEL},
     )
 
     sleep = extract_sleep(aruba_log, merge_gap_min, anchor_hour)
 
     return {
-        "meal_time": extract_meal(aruba_log),
+        "meal_time": extract_meal(aruba_log, meal_source),
         "sleep_time": sleep.sleep_time,
         "wake_time": sleep.wake_time,
     }
@@ -443,6 +569,7 @@ def report(path: Path = RAW_PATH) -> None:
 
     sleep = extract_sleep(aruba_log)
     meal = extract_meal(aruba_log)
+    sessions = meal_sessions(aruba_log.events)
 
     print("\n===== Sleeping =====")
     print(f"  segments          : {len(sleep.segments)} (dropped {sleep.dropped_segments})")
@@ -458,8 +585,14 @@ def report(path: Path = RAW_PATH) -> None:
     print(f"  crosses midnight  : {sum(e.start.date() != e.end.date() for e in sleep.main)}")
     print(f"  truncated (no wake): {sum(not e.wake_observed for e in sleep.main)}")
 
+    print("\n===== Meal (Context Engine 식사 묶음 규칙) =====")
+    print(f"  Meal_Preparation  : {len(meal_label_begins(aruba_log))}")
+    print(f"  식사 묶음          : {len(sessions)}")
+    print(f"  먹기 시각 있음     : {sum(m.eat_start is not None for m in sessions)}")
+    print(f"  먹기만 (조리 없음) : {sum(m.eat_start == m.start for m in sessions)}")
+
     print("\n===== Samples =====")
-    print(f"  meal_time         : {_summary(meal)}")
+    print(f"  meal_time (t0)    : {_summary(meal)}")
     print(f"  sleep_time (proxy): {_summary(sleep.sleep_time)}")
     print(f"  wake_time  (proxy): {_summary(sleep.wake_time)}")
     print()

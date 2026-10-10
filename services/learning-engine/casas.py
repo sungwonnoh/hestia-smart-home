@@ -249,16 +249,27 @@ def report(raw_dir: Path = RAW_DIR) -> None:
 
 def export_jsonl(out_dir: Path, raw_dir: Path = RAW_DIR) -> list[Path]:
     """
-    거주자별 sleep_start / sleep_end 이벤트 JSONL — Context Engine t0 로그와 같은 형식.
+    거주자별 t0 JSONL — Context Engine t0 로그와 같은 형식.
     baseline.py --t0-jsonl 로 다시 읽으면 밤잠 / 낮잠을 다시 구분해 학습한다.
+
+    sleep_start / sleep_end   모든 거주자
+    meal (t0 / eat_t0)        1인 가구 Aruba 만 — 2인 가구의 식사 라벨은 누구 것인지 알 수 없다
     """
+
+    from aruba import EAT_LABEL, MEAL_LABEL, meal_records, meal_sessions
 
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
 
     for spec, sleep in extract_all(raw_dir):
         path = out_dir / f"{spec.dataset}_{spec.person}_t0.jsonl"
-        write_records(session_events(sleep.classified, spec.dataset), path)
+        records = session_events(sleep.classified, spec.dataset)
+
+        if spec.dataset == "aruba":
+            meal_log = read_events(raw_dir / spec.file, {MEAL_LABEL, EAT_LABEL})
+            records += meal_records(meal_sessions(meal_log.events), spec.dataset)
+
+        write_records(records, path)
         written.append(path)
 
     return written
