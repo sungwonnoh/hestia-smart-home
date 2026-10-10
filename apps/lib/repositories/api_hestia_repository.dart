@@ -10,6 +10,7 @@ import '../models/medication.dart';
 import '../models/notification_item.dart';
 import '../models/room.dart';
 import '../models/user_preferences.dart';
+import '../models/weather.dart';
 import '../services/api_client.dart';
 import 'hestia_repository.dart';
 
@@ -143,6 +144,12 @@ class ApiHestiaRepository implements HestiaRepository {
         .delete('$_api/medications/${Uri.encodeComponent(medicationId)}');
   }
 
+  // ---------------------------------------------------------------- weather
+
+  @override
+  Future<Weather?> getWeather() => _orNull(() async =>
+      Weather.fromJson(_map(await _client.get('$_api/weather'))));
+
   // ---------------------------------------------------------------- polling
 
   late final StreamController<HestiaNotification> _incoming =
@@ -194,7 +201,7 @@ class ApiHestiaRepository implements HestiaRepository {
 
   // ---------------------------------------------------------------- helpers
 
-  /// 404는 "아직 없음"으로 본다 (설정 전, 판단 없음).
+  /// 404는 "아직 없음"으로 본다 (설정 전, 판단 없음, 날씨 수신 전).
   static Future<T?> _orNull<T>(Future<T> Function() call) async {
     try {
       return await call();

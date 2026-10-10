@@ -6,6 +6,8 @@ import '../../models/device.dart';
 import '../../models/medication.dart';
 import '../../models/notification_item.dart';
 import '../../models/room.dart';
+import '../../models/weather.dart';
+import 'time_format.dart';
 
 /// Context Engine 값을 사람이 읽는 문자열로 바꾼다.
 ///
@@ -224,4 +226,47 @@ abstract final class MedicationLabels {
         MealTiming.rightAfterMeal => Icons.restaurant_rounded,
         MealTiming.afterMeal30 => Icons.timer_rounded,
       };
+}
+
+/// 바깥 날씨 표시 문구와 아이콘.
+abstract final class WeatherLabels {
+  /// 예: "습도 61% · 비 1.5mm · 바람 1.8m/s"
+  static String details(Weather w) {
+    final h = w.humidityPct;
+    final mm = w.precipitationMm;
+    final wind = w.windSpeedMs;
+    return [
+      if (h != null) '습도 ${h.round()}%',
+      if (w.raining)
+        mm != null && mm > 0
+            ? '${w.precipType.label} ${_num(mm)}mm'
+            : w.precipType.label,
+      if (wind != null) '바람 ${_num(wind)}m/s',
+    ].join(' · ');
+  }
+
+  static String temperature(Weather w) {
+    final t = w.temperatureC;
+    return t == null ? '--°C' : '${_num(t)}°C';
+  }
+
+  /// 예: "오늘 14:00 관측", 오래됐으면 " · 업데이트 지연"
+  static String observed(Weather w, DateTime now) {
+    final t = w.observedAt;
+    final base =
+        t == null ? '관측 시각 모름' : '${TimeFormat.full(t, now)} 관측';
+    return w.stale ? '$base · 업데이트 지연' : base;
+  }
+
+  static IconData icon(Weather w) {
+    if (w.precipType.isSnow) return Icons.ac_unit_rounded;
+    if (w.raining) return Icons.umbrella_rounded;
+    return Icons.thermostat_rounded;
+  }
+
+  /// 소수 첫째 자리까지, .0 은 뺀다 (24.0 → 24, 1.5 → 1.5).
+  static String _num(double v) {
+    final s = v.toStringAsFixed(1);
+    return s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
+  }
 }

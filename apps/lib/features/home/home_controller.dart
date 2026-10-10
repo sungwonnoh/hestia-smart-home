@@ -3,6 +3,7 @@ import '../../models/context_state.dart';
 import '../../models/device.dart';
 import '../../models/medication.dart';
 import '../../models/room.dart';
+import '../../models/weather.dart';
 import '../../repositories/hestia_repository.dart';
 
 class HomeData {
@@ -11,6 +12,7 @@ class HomeData {
     required this.rooms,
     required this.devices,
     this.medications = const [],
+    this.weather,
   });
 
   final HestiaContext context;
@@ -19,6 +21,9 @@ class HomeData {
 
   /// 등록한 복약 일정. 없으면 홈에 [추가하기] 카드만 보인다.
   final List<Medication> medications;
+
+  /// 바깥 날씨. 아직 받지 못했으면 null이고 홈에 카드가 보이지 않는다.
+  final Weather? weather;
 
   String roomName(String roomId) {
     for (final r in rooms) {
@@ -56,12 +61,14 @@ class HomeController extends AsyncController<HomeData> {
       _repository.getRooms(),
       _repository.getDevices(),
       _repository.getMedications(),
+      _repository.getWeather(),
     ]);
     return HomeData(
       context: results[0] as HestiaContext,
       rooms: results[1] as List<Room>,
       devices: results[2] as List<Device>,
       medications: results[3] as List<Medication>,
+      weather: results[4] as Weather?,
     );
   }
 }
