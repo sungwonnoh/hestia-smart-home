@@ -14,7 +14,7 @@ from hestia_engine.world import WorldState
 HOME = """
 name = "test"
 areas = ["living", "kitchen", "bedroom", "bathroom", "utility", "entrance"]
-roles = ["LIVING", "SLEEP", "MEAL", "HYGIENE", "LAUNDRY", "ENTRY"]
+roles = ["LIVING", "SLEEP", "MEAL", "MEAL_HEAT", "HYGIENE", "LAUNDRY", "ENTRY"]
 
 [[sensors]]
 id = "vs-01"
@@ -71,6 +71,14 @@ id = "vs-13"
 type = "motion"
 area = "utility"
 roles = ["LAUNDRY"]
+node = "esp32-1"
+
+[[sensors]]
+id = "vs-14"
+type = "power"
+area = "kitchen"
+roles = ["MEAL_HEAT"]
+power_profile = "microwave"
 node = "esp32-1"
 
 [[devices]]
@@ -337,6 +345,47 @@ def test_eating_needs_gap(c):
     c.at(MORNING + 960).tick()                      # 60초 < gap 180
     assert c.a.state != "EATING"
 
+
+def test_eating_without_cooking(c):
+    """조리하지 않는 끼니도 잡힌다. 조리 종료는 관문이 아니다."""
+    c.presence("vs-04", True)
+    c.at(MORNING + 400).presence("vs-04", True, energy=12)
+    assert c.a.state == "EATING"
+
+
+def test_stale_cooking_is_not_evidence(c):
+    """5시간 전에 꺼진 인덕션은 그 식사와 무관하다."""
+    c.presence("vs-04", True)
+    c.power("vs-06", 1180, state="ON")
+    c.at(MORNING + 100).power("vs-06", 3, state="STANDBY")
+    c.at(MORNING + 100 + 5000).presence("vs-04", True, energy=12)
+    assert c.a.factors["cooking_off_sec"] > 3600
+    # 그래도 dwell + low_energy 로 EATING 은 선다
+    assert c.a.state == "EATING"
+
+
+def test_dishes_is_not_eating(c):
+    """서서 오래 있는 것은 설거지다. low_energy 가 가른다."""
+    c.presence("vs-04", True, energy=50)
+    c.at(MORNING + 400).presence("vs-04", True, energy=50)
+    assert c.a.state == "KITCHEN_MISC"
+
+
+def test_microwave_does_not_cook(c):
+    """데우는 것은 조리가 아니다. COOKING 을 만들지 않는다."""
+    c.presence("vs-04", True)
+    c.power("vs-14", 800, state="ON")
+    assert c.a.state != "COOKING"
+
+
+def test_heated_recent_boosts_eating(c):
+    c.presence("vs-04", True)
+    c.power("vs-14", 800, state="ON")
+    c.at(MORNING + 120).power("vs-14", 2, state="OFF")
+    c.at(MORNING + 400).presence("vs-04", True, energy=12)
+    assert c.a.factors["heated_sec"] is not None
+    assert c.a.state == "EATING"
+    
 
 def test_brief_kitchen_visit_is_misc(c):
     """물 마시러 들른 것이 EATING 으로 잡히면 KDE 분포가 망가진다."""

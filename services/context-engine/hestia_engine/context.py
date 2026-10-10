@@ -791,6 +791,7 @@ class ContextEngine:
         from .fsm import MealFSM, DayFSM
 
         self._clock = clock
+        self._config = config
         self._sched = scheduler
         self._on_change = on_change
         self._presence_eval = PresenceEvaluator(clock, config, world)
@@ -808,6 +809,7 @@ class ContextEngine:
         self.occupancy: OccupancyContext | None = None
         self.activity: ActivityContext | None = None
         self.suppression: SuppressionContext | None = None
+        self.day: Any | None = None
         self._day_prev: Any | None = None
         self._asleep_area: str | None = None
         self._on_hydration: Callable[[int], None] | None = None
@@ -842,15 +844,17 @@ class ContextEngine:
         )
         timers += t
 
-        # FSM 은 activity 를 읽기만 하고 t0 를 돌려준다 (단방향).
-        # 점수를 되돌려 바꾸면 순환이 생겨 추적이 불가능해진다.
+        meal_areas = self._config.areas_with_role("MEAL")
+        in_meal = any(presence.areas.get(a) for a in meal_areas)
         timers += self.meal_fsm.update(
-            activity.state, in_meal_area=bool(presence.areas.get("kitchen"))
+            activity.state, in_meal_area=in_meal, since=activity.since
         )
+
         timers += self.day_fsm.tick()
-        if not self.day_fsm.state.same_as(self._day_prev):
-            changed.append(self.day_fsm.state)
-        self._day_prev = self.day_fsm.state
+        self.day = self.day_fsm.state
+        if not self.day.same_as(self._day_prev):
+            changed.append(self.day)
+        self._day_prev = self.day
 
         if self.meal_fsm.t0 is not None and activity.state in ("COOKING", "EATING", "KITCHEN_MISC"):
             activity = replace(activity, t0=self.meal_fsm.t0)
@@ -876,7 +880,7 @@ class ContextEngine:
         return tuple(
             c for c in (
                 self.presence, self.away, self.occupancy,
-                self.activity, self.suppression,
+                self.activity, self.suppression, self.day,
             )
             if c is not None
         )

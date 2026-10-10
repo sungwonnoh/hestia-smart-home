@@ -175,6 +175,18 @@ class Config:
     def sensors_with_role(self, role: str) -> tuple[str, ...]:
         return self._by_role.get(role, ())
 
+    def areas_with_role(self, role: str) -> tuple[str, ...]:
+        """그 역할을 가진 센서가 있는 구역들.
+           식사 장소가 주방이 아닌 집을 설정으로 흡수한다 — 원룸처럼
+           한 공간이 여러 역할을 겸할 수 있다 (명세의 area/roles 분리).
+        """
+        out: list[str] = []
+        for vid in self._by_role.get(role, ()):
+            s = self._sensors.get(vid)
+            if s is not None and s.enabled and s.area and s.area not in out:
+                out.append(s.area)
+        return tuple(out)
+
     def devices_in(self, area: str) -> tuple[str, ...]:
         return self._dev_by_area.get(area, ())
 

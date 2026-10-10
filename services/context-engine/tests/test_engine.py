@@ -378,3 +378,91 @@ def test_policy_reads_engine_store(c):
     )
     assert d.candidate is True
     assert d.reason == ANOMALY
+
+
+# ============================================================ MEAL_PROMPT
+
+
+def meal_model(peaks: list[dict], density: list[float] | None = None) -> dict:
+    """세 끼 분포. peaks 는 배치가 나눠준 구간."""
+    if density is None:
+        density = [0.0] * 96
+        for i in range(30, 34):             # 07:30~08:30 아침
+            density[i] = 0.05
+        for i in range(48, 52):             # 12:00~13:00 점심
+            density[i] = 0.05
+        for i in range(72, 76):             # 18:00~19:00 저녁
+            density[i] = 0.15
+
+    return {
+        "version": 1, "sent_ts": 0, "src_id": "rpi4",
+        "trained_at": MORNING - 86400, "sample_days": 21,
+        "distributions": {"meal_time": {
+            "grid_min": 0, "grid_step": 15,
+            "density": density, "peaks": peaks,
+        }},
+        "predictability": {"meal_time": 0.33},
+    }
+
+
+MORNING_PEAK = {"center": 480, "from": 390, "to": 660,
+                "predictability": 0.54, "days_ratio": 1.0,
+                "meals_per_day": 1.0}
+LUNCH_PEAK = {"center": 750, "from": 660, "to": 900,
+              "predictability": 0.50, "days_ratio": 1.0,
+              "meals_per_day": 1.0}
+
+
+def meal_notifies(c) -> list[dict]:
+    return [
+        p for _, t, p in c.pub.published
+        if t.startswith("hestia/notify") and p.get("scenario") == "MEAL_PROMPT"
+    ]
+
+
+def test_late_meal_notifies(c):
+    """09:40 — 아침 구간의 꼬리다."""
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK]))
+    c.presence("vs-04", True)
+    assert len(meal_notifies(c)) == 1
+
+
+def test_only_once_per_peak(c):
+    """같은 끼니에 센서가 여러 번 울려도 한 번만 보낸다."""
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK]))
+    c.presence("vs-04", True)
+    c.at(MORNING + 300).presence("vs-04", False)
+    c.at(MORNING + 600).presence("vs-04", True)
+    assert len(meal_notifies(c)) == 1
+
+
+def test_no_peaks_no_judgement(c):
+    """봉우리가 1개 이하면 배치가 필드를 생략한다 — 가를 수 없다."""
+    payload = meal_model([])
+    del payload["distributions"]["meal_time"]["peaks"]
+    c.send("hestia/model/kde", payload)
+    c.presence("vs-04", True)
+    assert meal_notifies(c) == []
+
+
+def test_outside_any_peak_is_quiet(c):
+    """끼니 사이(11:00)에는 판단하지 않는다."""
+    c.at(MORNING + 4800)                     # 11:00
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK, LUNCH_PEAK]))
+    c.presence("vs-04", True)
+    assert meal_notifies(c) == []
+
+
+def test_timer_fires_in_quiet_house(tmp_path):
+    """센서가 조용해도 끼니가 늦으면 걸려야 한다.
+
+    사용자가 가만히 있으면 recompute 가 안 돈다. 타이머가 없으면
+    아침을 통째로 거른 날이 조용히 지나간다.
+    """
+    c = Ctx(tmp_path, start=MORNING - 7200)      # 07:40 — 아직 평소 시각
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK]))
+    c.presence("vs-04", True)
+    assert meal_notifies(c) == []
+
+    c.at(MORNING)                                # 09:40 — 센서 입력 없이
+    assert len(meal_notifies(c)) == 1

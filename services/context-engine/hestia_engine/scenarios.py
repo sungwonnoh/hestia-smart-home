@@ -19,7 +19,7 @@ from typing import Any, Callable
 from dataclasses import dataclass, replace
 
 from .control import Controller
-from .timeutil import KST, day_key, hhmm
+from .timeutil import KST, day_key, hhmm, minutes_since_midnight
 from datetime import datetime
 
 from .clock import Clock
@@ -28,6 +28,7 @@ from .notify import Notifier
 from .world import PresenceState, BedState, ClimateState, WorldState
 from .policy import Decision, InterventionPolicy
 from .fsm import T0Entry
+from .model import MealPeak, peak_tail
 
 log = logging.getLogger(__name__)
 
@@ -115,6 +116,10 @@ class ScenarioRunner:
         self._returned_at: float | None = None
         self._return_sent = False
 
+        # 식사
+        self._meal_fired: set[tuple[int, str]] = set()   # (peak.center, 날짜)
+
+
     def tick(self, context: Any) -> list[tuple[str, float]]:
         """시나리오를 전부 훑는다. 조건에 안 맞으면 조용히 지나간다."""
         self._context = context
@@ -122,6 +127,7 @@ class ScenarioRunner:
         timers += self._hydration_prompt(context)
         timers += self._safety(context)
         timers += self._sleep_routine(context)
+        timers += self._meal_prompt(context)
         return timers
 
     def note_hydration(self, amount_ml: int) -> None:
@@ -606,7 +612,11 @@ class ScenarioRunner:
         self._track_away(context, now)
         self._track_air(now)
 
-        if self._in_pause(now):
+        if self._in_pause(
+            now,
+            str(self._hyd("pause_start", "22:00")),
+            str(self._hyd("pause_end", "06:00")),
+        ):
             # 정숙 시간에 쌓인 1회성 조건은 버린다. 6시에 몰아서 보내면
             # 사용자는 '왜 지금' 을 알 수 없다.
             self._returned_at = None
@@ -625,13 +635,64 @@ class ScenarioRunner:
 
         self._send_hydration(context, reason, now)
         return self._hydration_timers(now)
+
+
+    # ------------------------------------------------------------ MEAL_PROMPT
+
+    def _meal_prompt(self, context: Any) -> list[tuple[str, float]]:
+        """끼니가 평소보다 늦은가.
+
+        하루 전체 분포로 보면 아침이 늦어도 뒤의 점심·저녁 질량이 남아
+        '아직 이르다' 가 된다. 배치가 나눠준 구간 안에서만 본다.
+        """
+        now = self._clock.now()
+
+        if self.asleep is not None:
+            return []
+        if self._meal_in_pause(now):
+            return []
+
+        peaks = self._policy.store.peaks()
+        if peaks is None:
+            return []                        # 봉우리가 1개 이하 — 가를 수 없다
+
+        minutes = minutes_since_midnight(now)
+        peak = next((p for p in peaks if p.contains(minutes)), None)
+        if peak is None:
+            return self._meal_timers(peaks, minutes, now)   # 다음 구간 시작을 예약
+
+        today = day_key(now)
+        if (peak.center, today) in self._meal_fired:
+            return self._meal_timers(peaks, minutes, now)
+
+        d = self._policy.evaluate_meal(
+            context.away, context.occupancy, context.suppression,
+            meal_done=self._ate_in(peak, context, now),
+            peak=peak,
+        )
+        decision_id = self._emit_decision(d)
+
+        if not d.candidate:
+            return self._meal_timers(peaks, minutes, now)
+
+        self._send_meal(context, peak, decision_id, now)
+        return self._meal_timers(peaks, minutes, now)
+
+    def _meal_in_pause(self, now: float) -> bool:
+        return self._in_pause(
+            now,
+            str(self._meal_cfg("pause_start", "21:00")),
+            str(self._meal_cfg("pause_end", "05:00")),
+        )
     
 
     # ------------------------------------------------------------ 판정 발행
 
     def _emit_decision(self, d: Decision) -> str | None:
-        """candidate 또는 reason 이 직전과 달라질 때만 발행한다."""
-        key = (d.candidate, d.reason)
+        """candidate 또는 reason 이 직전과 달라질 때만 발행한다.
+           끼니는 구간마다 따로 센다.
+        """
+        key = (d.candidate, d.reason, d.factors.get("peak_center"))
         if self._last.get(d.kind) == key:
             return None
 
@@ -889,15 +950,15 @@ class ScenarioRunner:
 
         return [(k, t) for k, t in out if t > now]
 
-    def _in_pause(self, now: float) -> bool:
+    def _in_pause(self, now: float, start: str = "22:00", end: str = "06:00") -> bool:
         """권하지 않는 시간대."""
-        start = hhmm(str(self._hyd("pause_start", "22:00")))
-        end = hhmm(str(self._hyd("pause_end", "06:00")))
+        start_min = hhmm(start)
+        end_min = hhmm(end)
         dt = datetime.fromtimestamp(now, KST)
         minutes = dt.hour * 60 + dt.minute
-        if start <= end:
-            return start <= minutes < end
-        return minutes >= start or minutes < end
+        if start_min <= end_min:
+            return start_min <= minutes < end_min
+        return minutes >= start_min or minutes < end_min
 
     def _today_at(self, hour: int, now: float) -> float:
         dt = datetime.fromtimestamp(now, KST).replace(
@@ -913,3 +974,85 @@ class ScenarioRunner:
 
     def _hyd(self, key: str, default: Any) -> Any:
         return self._config.value("scenarios", "hydration", key, default=default)
+
+    def _meal_cfg(self, key: str, default: Any) -> Any:
+        return self._config.value("scenarios", "meal", key, default=default)
+
+
+    def _ate_in(self, peak: MealPeak, context: Any, now: float) -> bool:
+        """이 구간에 이미 먹었는가. DayState.meals 는 eat_t0 기준."""
+        day = getattr(context, "day", None)
+        if day is not None:
+            today = day_key(now)
+            for ts in day.meals:
+                if day_key(ts) == today and peak.contains(minutes_since_midnight(ts)):
+                    return True
+
+        # 지금 먹는 중이면 묶음이 아직 안 닫혀 meals 에 없다.
+        # 그 사이에 "식사 아직이신가요" 가 나가면 안 된다.
+        activity = getattr(context, "activity", None)
+        return activity is not None and activity.state in ("COOKING", "EATING")
+
+    def _send_meal(self, context: Any, peak: MealPeak,
+                   decision_id: str | None, now: float) -> None:
+        notify_id = self._notifier.send(
+            scenario="MEAL_PROMPT",
+            title=str(self._notify_value("MEAL_PROMPT", "title", "식사")),
+            text=self._meal_text(peak),
+            priority=str(self._notify_value("MEAL_PROMPT", "priority", "normal")),
+            presence=getattr(context, "presence", None),
+            suppression=getattr(context, "suppression", None),
+            comply_kind="meal",
+            comply_check="done",
+            decision_id=decision_id,
+        )
+        if notify_id is None:
+            return
+        self._meal_fired.add((peak.center, day_key(now)))
+
+    def _meal_text(self, peak: MealPeak) -> str:
+        """어느 끼니인지는 시각으로 말한다."""
+        h, m = divmod(peak.center, 60)
+        default = f"{h}시{m:02d}분쯤 드시던 식사, 아직이신가요"
+        return str(self._notify_value("MEAL_PROMPT", "text", default))
+
+    def _meal_timers(self, peaks, minutes: int, now: float) -> list[tuple[str, float]]:
+        """센서가 조용해도 걸려야 한다.
+
+        구간 안이면 tail 이 임계에 닿는 시각, 구간 밖이면 다음 구간 시작.
+        """
+        at = self._meal_deadline(peaks, minutes, now)
+        return [("meal", at)] if at is not None and at > now else []
+
+    def _meal_deadline(self, peaks, minutes: int, now: float) -> float | None:
+        peak = next((p for p in peaks if p.contains(minutes)), None)
+        if peak is None:
+            return self._next_peak_start(peaks, minutes, now)
+
+        dist = self._policy.store.distribution("meal_time")
+        if dist is None:
+            return None
+
+        tail_max = float(
+            self._config.value("thresholds", "meal", "tail_max", default=0.05)
+        )
+        step = int(dist["grid_step"])
+
+        # 자정을 넘는 구간에서는 minutes 가 from_ 보다 작다.
+        pos = minutes if minutes >= peak.from_ else minutes + 1440
+        end = peak.from_ + self._span(peak)
+
+        for m in range(pos + step, end + 1, step):
+            if peak_tail(dist, peak, m % 1440) < tail_max:
+                return now + (m - pos) * 60.0
+        return None
+
+    @staticmethod
+    def _span(peak: MealPeak) -> int:
+        """구간 길이. 자정을 넘으면 펴서 센다."""
+        return peak.to - peak.from_ if peak.to > peak.from_ else peak.to + 1440 - peak.from_
+
+    def _next_peak_start(self, peaks, minutes: int, now: float) -> float | None:
+        """가장 가까운 다음 구간 시작."""
+        gaps = [(p.from_ - minutes) % 1440 for p in peaks]
+        return now + min(gaps) * 60.0 if gaps else None

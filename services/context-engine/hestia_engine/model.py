@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from .messages import ModelMessage
@@ -15,8 +16,7 @@ MODEL_NAMES = ("kde", "hmm", "classifier")
 # 명세의 KDE 분포 넷
 DISTRIBUTIONS = ("wake_time", "sleep_time", "meal_time", "hydration_lag")
 
-# 기준점이 자정이 아닌 분포. 하루 길이 검증에서 제외한다.
-# 기준점이 고정된 자정이 아닌 다른 사건에 상대적인 kde 분포의 목록 (현재는 hydration_lag만)
+# 자정이 아닌 다른 시점을 기준으로 하는 분포. 격자 길이 검사에서 뺀다.
 RELATIVE_DISTRIBUTIONS = frozenset({"hydration_lag"})
 
 
@@ -24,8 +24,41 @@ class ModelError(ValueError):
     """모델 페이로드가 명세를 만족하지 않음."""
 
 
-# ==================================================================== 보관
+# ==================================================================== 끼니 구간
 
+@dataclass(frozen=True, slots=True)
+class MealPeak:
+    """meal_time 의 끼니 구간. - 배치가 봉우리를 찾아 보냄"""
+
+    center: int                      # 식사가 가장 몰린 시각 (자정 기준 분)
+    from_: int                       # 구간 시작. 포함
+    to: int                          # 구간 끝. 미포함
+    predictability: float | None     # 그 구간만으로 다시 그린 KDE. 2개 미만이면 None
+    days_ratio: float                # 그 구간에 식사가 있었던 날 / sample_days
+    meals_per_day: float             # 그 구간 식사 수 / sample_days
+
+    def contains(self, minutes: int) -> bool:
+        """자정을 넘는 구간은 from > to 로 표현된다."""
+        if self.from_ <= self.to:
+            return self.from_ <= minutes < self.to
+        return minutes >= self.from_ or minutes < self.to
+
+    def bins(self, grid_step: int, n: int) -> list[int]:
+        """이 구간에 속하는 density 칸 번호들. 순환을 편다.
+           from 부터 시작해 to 까지, 자정을 넘으면 0으로 돌아간다.
+        """
+        out: list[int] = []
+        i = self.from_ // grid_step
+        for _ in range(n):
+            m = (i % n) * grid_step
+            if not self.contains(m):
+                break
+            out.append(i % n)
+            i += 1
+        return out
+
+
+# ==================================================================== 보관
 
 class ModelStore:
     """최신 모델을 메모리에 보관한다.
@@ -52,9 +85,25 @@ class ModelStore:
             log.warning("모델 교체 거부 — %s. 직전 모델을 유지한다.", exc)
             return False
 
+        if msg.name == "kde":
+            self._drop_bad_peaks(msg.payload)
+
         self._models[msg.name] = msg
         log.info("모델 갱신: %s trained_at=%s", msg.name, msg.trained_at)
         return True
+
+    @staticmethod
+    def _drop_bad_peaks(payload: dict[str, Any]) -> None:
+        """깨진 peaks 는 버리되 분포는 쓴다.
+        """
+        for name, dist in payload.get("distributions", {}).items():
+            if "peaks" not in dist:
+                continue
+            try:
+                validate_peaks(name, dist["peaks"])
+            except ModelError as exc:
+                log.warning("peaks 버림 — %s. 분포는 유지한다.", exc)
+                del dist["peaks"]
 
     def get(self, name: str) -> ModelMessage | None:
         return self._models.get(name)
@@ -77,6 +126,28 @@ class ModelStore:
         """학습에 쓰인 일수. 적으면 콜드스타트 블렌딩 비중이 높다."""
         kde = self._models.get("kde")
         return None if kde is None else kde.payload.get("sample_days")
+
+    def peaks(self, name: str = "meal_time") -> tuple[MealPeak, ...] | None:
+        """끼니 구간들. 분포가 없거나 peaks 필드가 없으면 None.
+           빈 튜플은 '판단할 끼니가 없다' 는 의미 — 봉우리가 전부 걸러진 경우
+        """
+        dist = self.distribution(name)
+        if dist is None or "peaks" not in dist:
+            return None
+        return tuple(
+            MealPeak(
+                center=int(p["center"]),
+                from_=int(p["from"]),
+                to=int(p["to"]),
+                predictability=(
+                    None if p.get("predictability") is None
+                    else float(p["predictability"])
+                ),
+                days_ratio=float(p.get("days_ratio", 0.0)),
+                meals_per_day=float(p.get("meals_per_day", 0.0)),
+            )
+            for p in dist["peaks"]
+        )
 
     def __repr__(self) -> str:
         return f"ModelStore({', '.join(sorted(self._models)) or 'empty'})"
@@ -139,6 +210,56 @@ def validate_distribution(name: str, dist: Any) -> None:
         raise ModelError(f"{name}.density 합이 0 이하")
 
 
+def validate_peaks(name: str, peaks: Any) -> None:
+    """끼니 구간. 하루를 다 덮지 않아도 되지만 겹치면 안 된다."""
+    if not isinstance(peaks, list):
+        raise ModelError(f"{name}.peaks 는 배열이어야 함")
+
+    seen: list[MealPeak] = []
+    for i, p in enumerate(peaks):
+        if not isinstance(p, dict):
+            raise ModelError(f"{name}.peaks[{i}] 는 객체여야 함")
+
+        for field in ("center", "from", "to"):
+            v = p.get(field)
+            if not isinstance(v, (int, float)) or not 0 <= v < 1440:
+                raise ModelError(f"{name}.peaks[{i}].{field} 범위 밖: {v!r}")
+
+        peak = MealPeak(
+            center=int(p["center"]), from_=int(p["from"]), to=int(p["to"]),
+            predictability=None, days_ratio=0.0, meals_per_day=0.0,
+        )
+        if not peak.contains(peak.center):
+            raise ModelError(
+                f"{name}.peaks[{i}]: center 가 구간 밖 "
+                f"({peak.center} not in [{peak.from_}, {peak.to}))"
+            )
+
+        pred = p.get("predictability")
+        if pred is not None and not (
+            isinstance(pred, (int, float)) and 0.0 <= pred <= 1.0
+        ):
+            raise ModelError(f"{name}.peaks[{i}].predictability 범위 밖: {pred!r}")
+
+        ratio = p.get("days_ratio", 0.0)
+        if not isinstance(ratio, (int, float)) or not 0.0 <= ratio <= 1.0:
+            raise ModelError(f"{name}.peaks[{i}].days_ratio 범위 밖: {ratio!r}")
+
+        mpd = p.get("meals_per_day", 0.0)
+        if not isinstance(mpd, (int, float)) or mpd < 0:
+            raise ModelError(f"{name}.peaks[{i}].meals_per_day 범위 밖: {mpd!r}")
+
+        for other in seen:
+            if _overlaps(peak, other):
+                raise ModelError(f"{name}.peaks[{i}] 가 앞 구간과 겹침")
+        seen.append(peak)
+
+
+def _overlaps(a: MealPeak, b: MealPeak) -> bool:
+    """15분 격자를 훑어 두 구간이 같은 칸을 차지하는지 본다."""
+    return any(a.contains(m) and b.contains(m) for m in range(0, 1440, 15))
+
+
 # ==================================================================== 조회
 
 
@@ -164,9 +285,7 @@ def tail_probability(
 
     density 는 합이 1 로 정규화되어 들어온다 (baseline.py 가 보장, 단순 누적합이 곧 확률)
 
-    window_min — 적분 범위를 제한한다. 다봉 분포에서 필요하다:
-        meal_time 에 아침·점심·저녁 봉우리
-        분포 분리 여부는 D 트랙 미결 사항
+    window_min — 적분 범위를 제한한다. 다봉은 peak_tail이 다룬다.
 
     wrap — 자정을 넘는 분포용. 
         sleep_time 은 23:40 과 00:20 이 같은
@@ -189,6 +308,31 @@ def tail_probability(
         )
 
     return float(sum(density[start:]))
+
+
+def peak_tail(dist: dict[str, Any], peak: MealPeak, minutes: float) -> float:
+    """끼니 구간 안에서의 꼬리확률.
+
+       분모가 그 구간 전체이므로 빈도는 지워진다. 가끔 먹는 끼니를 거르는 것은 배치의 days_ratio 가 한다.
+    """
+    density = dist["density"]
+    step = int(dist["grid_step"])
+    bins = peak.bins(step, len(density))
+    if not bins:
+        return 1.0
+
+    total = sum(density[i] for i in bins)
+    if total <= 0:
+        return 1.0
+
+    now_bin = grid_slot(dist, minutes)
+    # 순환 구간에서는 인덱스 비교가 아니라 구간 안 순서를 봐야 한다
+    try:
+        pos = bins.index(now_bin)
+    except ValueError:
+        return 1.0                      # 구간 밖
+
+    return float(sum(density[i] for i in bins[pos:]) / total)
 
 
 def percentile(dist: dict[str, Any], minutes: float) -> float:
@@ -232,3 +376,4 @@ def query(store: ModelStore, name: str, minutes: float) -> dict[str, Any] | None
         "sample_days": store.sample_days(),
         "trained_at": store.trained_at("kde"),
     }
+

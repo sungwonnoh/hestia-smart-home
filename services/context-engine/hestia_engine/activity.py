@@ -169,16 +169,25 @@ class ActivityEvaluator:
 
        
         # ---- 식사
-        if presence.areas.get("kitchen"):
+        meal_areas = self._config.areas_with_role("MEAL")
+        if any(presence.areas.get(a) for a in meal_areas):
             cooking = self._world.any_power_on("MEAL")
-            dwell = self._world.dwell_sec("kitchen")
-            off_sec = self._cooking_off_sec(now)
+            dwell = max((self._world.dwell_sec(a) for a in meal_areas), default=0.0)
+            off_sec = self._power_off_sec("MEAL", now)
+            heat_sec = self._power_off_sec("MEAL_HEAT", now)
             fridge = self._world.since_any_event("smart_fridge", "door_opened")
+
             fridge_window = float(
                 self._config.value("activity", "meal", "fridge_recent_window_sec", default=900)
             )
             gap_need = float(
                 self._config.value("activity", "meal", "prep_to_eating_gap_sec", default=180)
+            )
+            off_window = float(
+                self._config.value("activity", "meal", "cooking_off_window_sec", default=3600)
+            )
+            heat_window = float(
+                self._config.value("activity", "meal", "heated_window_sec", default=900)
             )
             dwell_need = float(
                 self._config.value("activity", "meal", "eating_min_dwell_sec", default=300)
@@ -186,12 +195,15 @@ class ActivityEvaluator:
             fridge_recent = fridge is not None and fridge <= fridge_window
 
             factors["cooking_on"] = cooking
-            factors["kitchen_dwell_sec"] = round(dwell)
+            factors["meal_area_dwell_sec"] = round(dwell)
             factors["cooking_off_sec"] = None if off_sec is None else round(off_sec)
+            factors["heated_sec"] = None if heat_sec is None else round(heat_sec)
             factors["fridge_recent"] = fridge_recent
 
             # 개인 분포에서 지금이 어디쯤인가.
-            # 분포가 activity 를 움직이고, activity 가 t0 를 만들고, t0 가 분포를 만든다. 되먹임을 막는 장치(낮은 가중치, sample_days 하한, predictability 하한)가 갖춰진 뒤에 켠다.
+            # 분포가 activity 를 움직이고, activity 가 t0 를 만들고,
+            # t0 가 분포를 만든다. 되먹임을 막는 장치(낮은 가중치,
+            # sample_days 하한, predictability 하한)가 갖춰진 뒤에 켠다.
             pct = self._percentile("meal_time", now)
             if pct is not None:
                 factors["meal_time_percentile"] = round(pct, 3)
@@ -202,22 +214,33 @@ class ActivityEvaluator:
                     prep += w("COOKING", "fridge_recent")
                 s["COOKING"] = prep
 
-            # 명세: 조리 기구 전력 종료 후 해당 구역 체류 지속이 주 신호.
-            # 냉저고·정수기 접근과 mmWave 의 energy 패턴이 보조 신호.
-            if not cooking and off_sec is not None and off_sec >= gap_need:
-                eating = w("EATING", "cooking_off_recent")
+            # 명세: 체류 지속이 주 신호, 조리 기구·냉장고가 보조.
+            # 가산 점수다 — 조리 종료를 관문으로 두면 조리하지 않는
+            # 끼니가 영영 잡히지 않는다.
+            if not cooking:
+                eating = 0.0
                 if dwell >= dwell_need:
-                    eating += w("EATING", "kitchen_dwell")
-                if self._low_energy("kitchen"):
+                    eating += w("EATING", "meal_area_dwell")
+                if self._low_energy_in(meal_areas):
+                    # 설거지와 가르는 신호다. 머무는 것만으로는
+                    # 서서 치우는 것과 구별되지 않는다.
                     eating += w("EATING", "low_energy")
+                if off_sec is not None and gap_need <= off_sec <= off_window:
+                    eating += w("EATING", "cooking_off_recent")
+                if heat_sec is not None and heat_sec <= heat_window:
+                    # 데우는 것은 조리가 아니다. COOKING 을 만들지 않고
+                    # 창도 짧다 — 꺼내서 바로 먹는다.
+                    eating += w("EATING", "heated_recent")
                 if fridge_recent:
                     eating += w("EATING", "fridge_recent")
-                s["EATING"] = eating
+                if eating > 0:
+                    s["EATING"] = eating
 
             # 조리도 식사도 아닌 주방 체류. t0 오염을 막는 자리다 —
             # 물 마시러 30초 들른 것이 EATING 으로 잡히면 KDE 분포가 망가진다.
             s["KITCHEN_MISC"] = w("KITCHEN_MISC", "kitchen_present")
 
+ 
         # ---- 위생
         if presence.areas.get("bathroom"):
             s["BATHROOM"] = w("BATHROOM", "bathroom_present")
@@ -329,6 +352,24 @@ class ActivityEvaluator:
                 return st
         return None
 
+    def _power_off_sec(self, role: str, now: float) -> float | None:
+        """그 역할의 전력이 꺼진 뒤 경과. 켜져 있거나 쓴 적 없으면 None.
+
+        여럿이면 가장 최근에 꺼진 것을 쓴다. 밥솥의 보온(STANDBY)도
+        꺼진 것으로 본다 — 취사가 끝났다는 뜻이다.
+        """
+        from .world import PowerState
+
+        best: float | None = None
+        for st in self._world.sensors_by_role(role):
+            if isinstance(st, PowerState) and st.state != "ON" and st.changed_at > 0.0:
+                gap = now - st.changed_at
+                best = gap if best is None else min(best, gap)
+        return best
+
+    def _low_energy_in(self, areas: tuple[str, ...]) -> bool:
+        return any(self._low_energy(a) for a in areas)
+
     def _low_energy(self, area: str) -> bool:
         still_max = float(self._config.value("presence", "energy", "still_max", default=10))
         active_min = float(self._config.value("presence", "energy", "active_min", default=30))
@@ -337,19 +378,6 @@ class ActivityEvaluator:
                 return st.energy < active_min
         return False
 
-    def _cooking_off_sec(self, now: float) -> float | None:
-        """조리 기구가 꺼진 뒤 경과. 켜져 있거나 쓴 적 없으면 None.
-
-        여럿이면 가장 최근에 꺼진 것을 쓴다.
-        """
-        from .world import PowerState
-
-        best: float | None = None
-        for st in self._world.sensors_by_role("MEAL"):
-            if isinstance(st, PowerState) and st.state != "ON" and st.changed_at > 0.0:
-                gap = now - st.changed_at
-                best = gap if best is None else min(best, gap)
-        return best
 
     def _tv(self):
         devices = self._world.devices_of_type("smart_tv")
