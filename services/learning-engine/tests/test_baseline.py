@@ -138,9 +138,13 @@ def test_type_maps_to_distribution():
     converted = t0_to_kde_samples([
         sample(type="wake"),
         sample(type="meal"),
-        sample(type="hydration"),
     ])
-    assert [k.distribution for k in converted] == ["wake_time", "meal_time", "hydration_lag"]
+    assert [k.distribution for k in converted] == ["wake_time", "meal_time"]
+
+
+def test_hydration_is_not_learned():
+    """hydration_lag 는 팀 결정으로 KDE 에서 뺐다 — hydration t0 는 다른 비대상 type 처럼 제외."""
+    assert t0_to_kde_sample(parse_t0_line(json.dumps(HYDRATION))) is None
 
 
 def test_sleep_t0_is_not_mapped():
@@ -180,11 +184,6 @@ def test_t0_is_converted_to_kst_minutes():
     assert t0_to_minutes(WAKE["t0"]) == 9 * 60
 
 
-def test_hydration_lag_uses_duration_not_t0():
-    k = t0_to_kde_sample(parse_t0_line(json.dumps(HYDRATION)))
-    assert (k.distribution, k.value) == ("hydration_lag", 11.0)    # 660초 = 기상 후 11분
-
-
 def test_build_training_input_from_jsonl_only(tmp_path):
     """Gate D: t0 JSONL 만으로 KDE 학습 입력을 만들 수 있다."""
     path = write_jsonl(tmp_path / "t0.jsonl", [MEAL, WAKE, HYDRATION])
@@ -192,7 +191,6 @@ def test_build_training_input_from_jsonl_only(tmp_path):
     assert {k: v.tolist() for k, v in inputs.items()} == {
         "meal_time": [560.0],
         "wake_time": [540.0],
-        "hydration_lag": [11.0],
     }
 
 
@@ -214,7 +212,7 @@ def test_build_model_from_t0_samples():
 
 
 def test_build_model_does_not_depend_on_source():
-    """같은 값이면 출처(t0 / aruba / synthetic)가 달라도 같은 모델이다."""
+    """같은 값이면 출처(t0 / aruba)가 달라도 같은 모델이다."""
     from_t0 = t0_to_kde_samples(t0_meal_days())
     relabeled = [
         KdeSample(k.distribution, k.value, k.date, source="aruba")

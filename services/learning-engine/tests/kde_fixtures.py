@@ -4,7 +4,6 @@ import numpy as np
 
 from baseline import parse_t0_record
 from samples import KdeSample
-from synthetic import generate_hydration_lag
 
 
 # 2026-09-01 00:00 KST
@@ -19,12 +18,11 @@ def clock_samples(distribution, center, spread, n=40, seed=0):
     ]
 
 
-def four_distributions():
+def all_distributions():
     return (
         clock_samples("wake_time", 7 * 60, 20, seed=1)
         + clock_samples("sleep_time", 23 * 60 + 30, 30, seed=2)
         + clock_samples("meal_time", 12 * 60, 60, seed=3)
-        + generate_hydration_lag(40, 15, 5, seed=4, max_min=120)
     )
 
 

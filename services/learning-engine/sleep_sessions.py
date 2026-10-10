@@ -44,6 +44,11 @@ MERGE_GAP_MIN = 15.0
 # Aruba 수면 시작 시각은 08~13시에 거의 없다 (401건 중 2건).
 NIGHT_ANCHOR_HOUR = 12
 
+# 깬 동안 이 구역만 들렀거나 잠든 구역을 떠나지 않았으면(awake_areas = []) 같은 수면으로 잇는다.
+# 간격과 관계없다 — 새벽에 1~2시간 깨어 있다 다시 잔 것도 하룻밤이다 (CASAS Milan 13건).
+# Context Engine 의 sleep_start.awake_areas 는 직전 sleep_end 이후 들른 구역이다 (다시 잠든 구역 제외).
+RESUME_AREAS = frozenset({"bathroom"})
+
 # 한 번의 수면은 하룻밤 범위(24시간)를 넘을 수 없다. 넘으면 기록 오류로 본다.
 # 예: Tulum2 는 센서 기록이 거의 끊긴 날(하루 30여 줄)에 수면 라벨이 이어져 32~34시간이 된다.
 MAX_SESSION_HOURS = 24
@@ -69,6 +74,8 @@ class SleepSession:
     prompted: bool = False
     area: str | None = None     # sleep_start 의 area. 저장만 하고 판단에는 쓰지 않는다
     source: str = ""
+    awake_areas: tuple[str, ...] | None = None
+    """sleep_start 직전에 깨어 있는 동안 들른 구역. None 은 모름, () 는 잠든 구역을 떠나지 않음."""
 
     @property
     def minutes(self) -> float:
@@ -99,14 +106,18 @@ def merge_sessions(
     sessions: Sequence[SleepSession],
     merge_gap_min: float = MERGE_GAP_MIN,
     bridges: Iterable[datetime] = (),
+    resume_areas: frozenset[str] | None = RESUME_AREAS,
 ) -> list[SleepSession]:
     """
     끊긴 수면 구간을 합친다. 입력 순서(기록 순서)를 그대로 쓴다.
 
     다음 중 하나면 앞 구간과 합친다.
       - 두 구간 사이 간격이 0 이상 merge_gap_min 이하
-      - 두 구간 사이에 bridge 시각이 있다 (예: Bed_to_Toilet 시작)
+      - 두 구간 사이에 bridge 시각이 있다 (예: CASAS Bed_to_Toilet 시작)
+      - 뒤 구간의 awake_areas 가 resume_areas 안이다 (Context Engine — 화장실만 다녀왔거나
+        잠든 구역을 떠나지 않음). 간격과 관계없다. awake_areas 가 None(모름)이면 쓰지 않는다
 
+    잇는 방향으로만 쓴다 — 주방에 다녀왔어도 간격이 짧으면 같은 수면이다 (새벽 물 마시기).
     간격이 음수면(시각 역전) 합치지 않는다.
     """
 
@@ -118,13 +129,20 @@ def merge_sessions(
     def bridged(a: SleepSession, b: SleepSession) -> bool:
         return any(a.end < t < b.start for t in bridges)
 
+    def resumed(b: SleepSession) -> bool:
+        return (
+            resume_areas is not None
+            and b.awake_areas is not None
+            and set(b.awake_areas) <= resume_areas
+        )
+
     merged = []
     current = sessions[0]
 
     for nxt in sessions[1:]:
         gap = (nxt.start - current.end).total_seconds() / 60
 
-        if gap >= 0 and (gap <= merge_gap_min or bridged(current, nxt)):
+        if gap >= 0 and (gap <= merge_gap_min or bridged(current, nxt) or resumed(nxt)):
             current = replace(
                 current,
                 end=nxt.end,
@@ -276,6 +294,7 @@ def _epoch(ts: datetime) -> float:
 def sessions_from_events(records: Iterable[dict]) -> tuple[list[SleepSession], int]:
     """
     sleep_start / sleep_end 이벤트 → SleepSession. 다른 type 은 무시한다.
+    sleep_start 의 area / awake_areas 를 함께 담는다 (awake_areas 가 문자열 배열이 아니면 None = 모름).
 
     t0 순으로 정렬해 start 와 그다음 end 를 짝짓는다.
       - end 없이 다음 start 가 오면 앞 start 는 기상 미관측 (길이 0)
@@ -303,6 +322,7 @@ def sessions_from_events(records: Iterable[dict]) -> tuple[list[SleepSession], i
     def open_session(ts: datetime, r: dict) -> SleepSession:
         area = r.get("area")
         source = r.get("source")
+        awake = r.get("awake_areas")
         return SleepSession(
             start=ts,
             end=ts,
@@ -310,6 +330,11 @@ def sessions_from_events(records: Iterable[dict]) -> tuple[list[SleepSession], i
             prompted=r.get("prompted") is True,
             area=area if isinstance(area, str) else None,
             source=source if isinstance(source, str) else "",
+            awake_areas=(
+                tuple(awake)
+                if isinstance(awake, (list, tuple)) and all(isinstance(a, str) for a in awake)
+                else None
+            ),
         )
 
     sessions = []

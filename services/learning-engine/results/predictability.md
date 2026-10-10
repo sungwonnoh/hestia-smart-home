@@ -4,7 +4,6 @@
 
 - 정의: `predictability = 1 - H / H_max`
 - 시각 분포: 15분 96칸, circular KDE, H_max = ln 96 = 4.564
-- hydration_lag: 5분 24칸 (0~120분), 직선 KDE, H_max = ln 24 = 3.178
 - synthetic 은 seed 0~19 (20회) 평균 ± 표준편차
 - bandwidth 는 gaussian_kde 기본값(Scott)
 
@@ -57,18 +56,7 @@ wake_time / sleep_time 은 Aruba `Sleeping` 라벨로 만든 proxy 다 (HESTIA t
 | wake_time (proxy) | 219 | 78.2 | 3.110 | 0.319 |
 | sleep_time (proxy) | 220 | 69.9 | 2.982 | 0.347 |
 
-## 4. hydration_lag regular / irregular (synthetic)
-
-n = 60, 0~120분 밖은 재추출. 재추출로 분포가 비대칭이 되어 실제 std 가 지정 std 와 다르다.
-
-| 조건 | n | 지정 std | 실제 std (분) | entropy (nats) | predictability |
-|---|---:|---:|---:|---:|---:|
-| regular (mean 15) | 60 | 5 | 4.8 ± 0.4 | 1.443 | 0.546 ± 0.025 |
-| irregular (mean 15) | 60 | 30 | 19.8 ± 2.1 | 2.697 | 0.151 ± 0.031 |
-
-> hydration_lag 는 칸 수(24)가 시각 분포(96)와 달라 H_max 가 다르다. predictability 값을 시각 분포와 직접 비교하지 않는다.
-
-## 5. CASAS 거주자별 sleep / wake (proxy)
+## 4. CASAS 거주자별 sleep / wake (proxy)
 
 Aruba 한 사람만으로는 규칙적 / 불규칙한 사람의 차이를 실제 데이터로 볼 수 없어 다른 CASAS 데이터셋의 거주자를 더했다. 밤마다 가장 긴 수면을 밤잠으로 골라 취침(sleep_time) / 기상(wake_time) 을 학습한다. 24시간 이상 수면은 기록 오류로 제외.
 

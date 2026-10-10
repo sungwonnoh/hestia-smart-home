@@ -10,7 +10,7 @@ import pytest
 
 import mqtt_publisher
 from baseline import build_model
-from kde_fixtures import four_distributions
+from kde_fixtures import all_distributions
 from model_payload import (
     PAYLOAD_KEYS,
     TOPIC,
@@ -28,7 +28,7 @@ CONTEXT_ENGINE = Path(__file__).resolve().parents[3] / "services" / "context-eng
 
 @pytest.fixture(scope="module")
 def full_payload():
-    return build_kde_payload(build_model(four_distributions()), trained_at=1790280000, sent_ts=1790296800)
+    return build_kde_payload(build_model(all_distributions()), trained_at=1790280000, sent_ts=1790296800)
 
 
 def broken(payload, mutate):
@@ -47,9 +47,9 @@ def test_required_fields(full_payload):
     assert full_payload["sample_days"] > 0
 
 
-def test_gate_c_four_distributions(full_payload):
+def test_gate_c_all_distributions(full_payload):
     """Gate C: 4개 분포가 하나의 payload 에 들어간다."""
-    names = ["wake_time", "sleep_time", "meal_time", "hydration_lag"]
+    names = ["wake_time", "sleep_time", "meal_time"]
     assert list(full_payload["distributions"]) == names
     assert list(full_payload["predictability"]) == names
     validate_kde_payload(full_payload, require_all=True)
@@ -59,8 +59,6 @@ def test_grids(full_payload):
     d = full_payload["distributions"]
     for name in ("wake_time", "sleep_time", "meal_time"):
         assert (d[name]["grid_min"], d[name]["grid_step"], len(d[name]["density"])) == (0, 15, 96)
-    assert (d["hydration_lag"]["grid_min"], d["hydration_lag"]["grid_step"]) == (0, 5)
-    assert len(d["hydration_lag"]["density"]) == 24
 
 
 def test_model_meta_is_not_in_payload(full_payload):
@@ -79,7 +77,7 @@ def test_default_model_is_partial_but_valid():
     breakfast = Path(__file__).resolve().parents[3] / "data" / "processed" / "aruba" / "breakfast_preparation.csv"
     payload = build_kde_payload(build_model(load_aruba_samples(breakfast)))
     assert list(payload["distributions"]) == ["meal_time"]
-    assert missing_distributions(payload) == ["wake_time", "sleep_time", "hydration_lag"]
+    assert missing_distributions(payload) == ["wake_time", "sleep_time"]
     with pytest.raises(PayloadError, match="누락"):
         validate_kde_payload(payload, require_all=True)
 
@@ -135,7 +133,8 @@ def _del(path):
         (_set(["distributions", "meal_time", "density"], [math.nan] + [1 / 95] * 95), "NaN"),
         (_set(["distributions", "meal_time", "density"], [-0.01, 0.01 + 1 / 96] + [1 / 96] * 94), "음수"),
         (_set(["distributions", "meal_time", "density"], [0.5 / 96] * 96), "합이 1"),
-        (_set(["distributions", "hydration_lag", "density"], ["0.1"] * 10), "숫자"),
+        (_set(["distributions", "sleep_time", "density"], ["0.1"] * 96), "숫자"),
+        (_set(["distributions", "hydration_lag"], {"grid_min": 0, "grid_step": 5, "density": [1.0]}), "알 수 없는"),
         (_del(["predictability", "meal_time"]), "이름이 다릅니다"),
         (_set(["predictability", "meal_time"], 1.5), "0~1"),
         (_set(["predictability", "meal_time"], math.inf), "0~1"),
@@ -144,13 +143,6 @@ def _del(path):
 def test_invalid_payload_is_rejected(full_payload, mutate, match):
     with pytest.raises(PayloadError, match=match):
         validate_kde_payload(broken(full_payload, mutate))
-
-
-def test_hydration_length_is_not_day_based(full_payload):
-    """hydration_lag 는 1440/grid_step 검증을 받지 않는다."""
-    p = broken(full_payload, _set(["distributions", "hydration_lag", "density"], [0.1] * 10))
-    p["predictability"]["hydration_lag"] = 0.0
-    validate_kde_payload(p)
 
 
 def test_non_serializable_is_rejected():
@@ -261,4 +253,4 @@ def test_context_engine_accepts_payload(full_payload):
     assert query(store, "meal_time", 12 * 60)["predictability"] == pytest.approx(
         full_payload["predictability"]["meal_time"]
     )
-    assert 0 <= query(store, "hydration_lag", 15)["tail_probability"] <= 1
+    assert 0 <= query(store, "sleep_time", 23 * 60)["tail_probability"] <= 1

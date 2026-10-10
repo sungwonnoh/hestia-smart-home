@@ -4,16 +4,12 @@ KDE 공통 학습 입력 계층.
 KDE fitting 은 데이터 출처를 모른다. 출처별 adapter 가 KdeSample 을 만들고,
 KDE 는 distribution 별 숫자 배열만 받는다.
 
-    Aruba parser      (aruba.py)      ┐
-    Synthetic fixture (synthetic.py)  ├─→ KdeSample ─→ values() ─→ fit_kde(...)
-    t0 adapter        (baseline.py)   ┘
+    Aruba / CASAS parser (aruba.py, casas.py)  ┐
+    t0 adapter           (baseline.py)          ┴─→ KdeSample ─→ values() ─→ fit_kde(...)
 
-distribution 은 두 종류다. 같은 숫자라도 처리가 다르다.
-
-    time_of_day : wake_time / sleep_time / meal_time
-                  자정 기준 분, [0, 1440). 자정에서 이어진다 (circular, Phase 6).
-    elapsed     : hydration_lag
-                  기준 사건(기상) 이후 경과 분, 0 이상. 이어지지 않는다.
+distribution 은 모두 시각 분포다 (wake_time / sleep_time / meal_time).
+값은 자정 기준 분, [0, 1440). 자정에서 이어진다 (circular).
+hydration_lag 는 팀 결정으로 KDE 에서 뺐다 (Context Engine HYDRATION_PROMPT 는 간격 규칙).
 """
 
 from __future__ import annotations
@@ -27,14 +23,12 @@ import numpy as np
 MINUTES_PER_DAY = 1440
 
 TIME_OF_DAY = "time_of_day"
-ELAPSED = "elapsed"
 
-# hestia/model/kde 명세의 distribution 4종
+# hestia/model/kde 의 distribution
 DISTRIBUTION_KIND = {
     "wake_time": TIME_OF_DAY,
     "sleep_time": TIME_OF_DAY,
     "meal_time": TIME_OF_DAY,
-    "hydration_lag": ELAPSED,
 }
 
 
@@ -47,7 +41,7 @@ class KdeSample:
     """
     KDE 학습 표본 한 건.
 
-    source 는 학습 입력 내부의 출처 표시다 (aruba / synthetic / sensor / diary).
+    source 는 학습 입력 내부의 출처 표시다 (aruba / milan / ... / sensor / diary).
     hestia/log/t0 의 source enum 과 별개이며 MQTT 로 나가지 않는다.
 
     proxy 는 HESTIA 가 실제로 측정한 값이 아니라 다른 데이터로 대신한 값이다
@@ -77,8 +71,6 @@ class KdeSample:
         if kind == TIME_OF_DAY and not 0 <= self.value < MINUTES_PER_DAY:
             raise ValueError(f"{self.distribution}: 자정 기준 분은 [0, 1440) 이어야 합니다: {self.value}")
 
-        if kind == ELAPSED and self.value < 0:
-            raise ValueError(f"{self.distribution}: 경과 분은 0 이상이어야 합니다: {self.value}")
 
 
 def group(samples: list[KdeSample]) -> dict[str, list[KdeSample]]:

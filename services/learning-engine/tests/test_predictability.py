@@ -33,12 +33,6 @@ def test_more_samples_do_not_lower_predictability_much():
         assert rows[(std, 212)] >= rows[(std, 14)] - 0.01
 
 
-def test_hydration_regular_beats_irregular():
-    regular, irregular = vp.hydration_rows(seeds=3)
-    assert regular.predictability > irregular.predictability
-    assert regular.actual_std < irregular.actual_std
-
-
 def test_aruba_breakfast_matches_model():
     """기존 모델 값(0.330)과 같은 함수로 계산한다."""
     rows, note = vp.aruba_rows(raw_path=None, breakfast_path=BREAKFAST)

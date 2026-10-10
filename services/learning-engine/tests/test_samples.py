@@ -8,7 +8,6 @@ import samples
 from aruba import extract_samples
 from baseline import fit_kde, parse_t0_line, t0_to_kde_samples
 from samples import KdeSample, build_training_input, group, is_time_of_day, sample_days, values
-from synthetic import generate_hydration_lag
 
 
 def k(distribution="meal_time", value=560.0, date="2026-09-25", **kw) -> KdeSample:
@@ -18,10 +17,12 @@ def k(distribution="meal_time", value=560.0, date="2026-09-25", **kw) -> KdeSamp
 # ============================================================ 종류
 
 
-def test_four_distributions_and_kinds():
-    assert set(samples.DISTRIBUTION_KIND) == {"wake_time", "sleep_time", "meal_time", "hydration_lag"}
+def test_distributions_are_time_of_day():
+    """hydration_lag 는 팀 결정으로 KDE 에서 뺐다."""
+    assert set(samples.DISTRIBUTION_KIND) == {"wake_time", "sleep_time", "meal_time"}
     assert [is_time_of_day(n) for n in ("wake_time", "sleep_time", "meal_time")] == [True] * 3
-    assert is_time_of_day("hydration_lag") is False
+    with pytest.raises(ValueError, match="distribution"):
+        k("hydration_lag", 11.0)
 
 
 # ============================================================ 검증
@@ -54,17 +55,6 @@ def test_time_of_day_range_rejects(value):
         k(value=value)
 
 
-def test_elapsed_is_not_bounded_by_day():
-    """hydration_lag 은 하루 시각이 아니다 — 1440 제한을 적용하지 않는다."""
-    assert k("hydration_lag", 2000.0).value == 2000.0
-    assert k("hydration_lag", 0.0).value == 0.0
-
-
-def test_negative_elapsed_is_rejected():
-    with pytest.raises(ValueError, match="0 이상"):
-        k("hydration_lag", -1.0)
-
-
 # ============================================================ 묶기
 
 
@@ -86,7 +76,7 @@ def test_values_and_sample_days():
 
 
 def test_all_sources_feed_the_same_fit(tmp_path):
-    """Aruba / synthetic / t0 가 같은 KdeSample 로 모여 같은 fit_kde 를 탄다."""
+    """Aruba / t0 가 같은 KdeSample 로 모여 같은 fit_kde 를 탄다."""
     aruba_txt = tmp_path / "aruba.txt"
     lines = []
     for day in range(4, 9):
@@ -99,7 +89,6 @@ def test_all_sources_feed_the_same_fit(tmp_path):
     aruba_txt.write_text("\n".join(lines + ["2010-11-10 00:00:00.0\tT002\t21"]) + "\n", encoding="utf-8")
     from_aruba = [s for series in extract_samples(aruba_txt).values() for s in series]
 
-    from_synthetic = generate_hydration_lag(30, 15, 5, seed=42)
 
     t0_lines = [
         {"date": f"2026-09-{d:02d}", "type": "wake", "t0": 1790294400.0 + (d - 25) * 86400 + d * 60,
@@ -108,11 +97,11 @@ def test_all_sources_feed_the_same_fit(tmp_path):
     ]
     from_t0 = t0_to_kde_samples([parse_t0_line(json.dumps(x)) for x in t0_lines])
 
-    everything = from_aruba + from_synthetic + from_t0
+    everything = from_aruba + from_t0
     assert all(isinstance(s, KdeSample) for s in everything)
 
     inputs = build_training_input(everything)
-    assert set(inputs) == {"meal_time", "sleep_time", "wake_time", "hydration_lag"}
+    assert set(inputs) == {"meal_time", "sleep_time", "wake_time"}
     assert len(inputs["wake_time"]) == 5 + 6          # aruba proxy + t0
 
     for name, arr in inputs.items():
@@ -120,6 +109,3 @@ def test_all_sources_feed_the_same_fit(tmp_path):
         assert np.isfinite(kde(arr)).all(), name
 
 
-def test_sources_are_marked():
-    from_synthetic = generate_hydration_lag(3, 15, 5, seed=1)
-    assert {(s.source, s.proxy, s.prompted) for s in from_synthetic} == {("synthetic", False, False)}
