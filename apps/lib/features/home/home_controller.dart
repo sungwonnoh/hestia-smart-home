@@ -1,6 +1,7 @@
 import '../../core/state/async_controller.dart';
 import '../../models/context_state.dart';
 import '../../models/device.dart';
+import '../../models/medication.dart';
 import '../../models/room.dart';
 import '../../repositories/hestia_repository.dart';
 
@@ -9,11 +10,15 @@ class HomeData {
     required this.context,
     required this.rooms,
     required this.devices,
+    this.medications = const [],
   });
 
   final HestiaContext context;
   final List<Room> rooms;
   final List<Device> devices;
+
+  /// 등록한 복약 일정. 없으면 홈에 [추가하기] 카드만 보인다.
+  final List<Medication> medications;
 
   String roomName(String roomId) {
     for (final r in rooms) {
@@ -50,11 +55,13 @@ class HomeController extends AsyncController<HomeData> {
       _repository.getCurrentContext(),
       _repository.getRooms(),
       _repository.getDevices(),
+      _repository.getMedications(),
     ]);
     return HomeData(
       context: results[0] as HestiaContext,
       rooms: results[1] as List<Room>,
       devices: results[2] as List<Device>,
+      medications: results[3] as List<Medication>,
     );
   }
 }

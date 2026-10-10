@@ -2,6 +2,7 @@ import '../models/context_state.dart';
 import '../models/device.dart';
 import '../models/explanation.dart';
 import '../models/home_setup.dart';
+import '../models/medication.dart';
 import '../models/notification_item.dart';
 import '../models/room.dart';
 import '../models/user_preferences.dart';
@@ -42,4 +43,14 @@ abstract interface class HestiaRepository {
 
   /// 새 알림 스트림. 실시간 방식(MQTT/WebSocket/SSE)은 구현체가 정한다.
   Stream<HestiaNotification> watchNotifications();
+
+  /// 복약 일정. 등록하지 않았으면 빈 목록.
+  Future<List<Medication>> getMedications();
+
+  /// 새 일정을 저장하고 서버가 정한 id·기간을 담아 돌려준다.
+  Future<Medication> addMedication(Medication medication);
+
+  Future<Medication> updateMedication(Medication medication);
+
+  Future<void> deleteMedication(String medicationId);
 }

@@ -11,10 +11,12 @@ from .config import Settings
 from .repositories.database import Database
 from .repositories.device_repository import DeviceRepository
 from .repositories.history_repository import HistoryRepository
+from .repositories.medication_repository import MedicationRepository
 from .repositories.preference_repository import PreferenceRepository
 from .services.context_service import ExplanationService, StateCache
 from .services.device_service import DeviceService
 from .services.ingest_service import SUBSCRIPTIONS, IngestService
+from .services.medication_service import MedicationService
 from .services.monitor_service import MonitorHub
 from .services.mqtt_service import MqttService, NullMqttService
 from .services.notification_service import NotificationService
@@ -26,6 +28,7 @@ class Container:
     db: Database
     device_repo: DeviceRepository
     preference_repo: PreferenceRepository
+    medications: MedicationService
     history: HistoryRepository
     cache: StateCache
     devices: DeviceService
@@ -54,11 +57,14 @@ def build_container(settings: Settings, mqtt: Any = None) -> Container:
                                         area_of=cache.registry_area)
     ingest = IngestService(cache, history, devices, notifications, monitor)
     mqtt.set_handler(ingest.handle)
+    medications = MedicationService(MedicationRepository(db), mqtt, settings.src_id)
+    mqtt.add_on_connect(medications.publish_schedule)
     return Container(
         settings=settings,
         db=db,
         device_repo=device_repo,
         preference_repo=PreferenceRepository(db),
+        medications=medications,
         history=history,
         cache=cache,
         devices=devices,

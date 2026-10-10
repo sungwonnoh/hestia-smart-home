@@ -1,0 +1,15 @@
+[
+  {
+    "name": "혈압약",
+    "slots": [
+      "BREAKFAST",
+      "DINNER"
+    ],
+    "mealTiming": "AFTER_MEAL_30MIN",
+    "days": 30,
+    "startDate": "2026-10-09",
+    "refillRequired": true,
+    "id": "med-08a0b745",
+    "endDate": "2026-11-07"
+  }
+]

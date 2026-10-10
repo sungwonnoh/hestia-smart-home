@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:hestia_flutter_test/app/app.dart';
+import 'package:hestia_flutter_test/models/home_setup.dart';
+import 'package:hestia_flutter_test/models/room.dart';
+import 'package:hestia_flutter_test/models/user_preferences.dart';
 import 'package:hestia_flutter_test/repositories/mock_hestia_repository.dart';
 
 Future<void> _boot(WidgetTester tester, MockHestiaRepository repo) async {
@@ -87,5 +90,43 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
     expect(find.text('시작하기'), findsOneWidget);
+  });
+
+  testWidgets('홈에서 복약 알림을 추가하면 홈 카드에 보인다', (tester) async {
+    final repo = MockHestiaRepository(
+      latency: Duration.zero,
+      initialSetup: const HomeSetup(
+        rooms: [Room(id: 'living', name: '거실')],
+        devices: [],
+        preferences: UserPreferences(),
+      ),
+    );
+    await _boot(tester, repo);
+
+    await _tap(tester, find.text('복약 알림 추가하기'));
+    expect(find.text('무슨 약인가요?'), findsOneWidget);
+    await _tap(tester, find.text('혈압약'));
+    await _tap(tester, find.text('다음'));
+
+    await _tap(tester, find.text('아침'));
+    await _tap(tester, find.text('저녁'));
+    await _tap(tester, find.text('다음'));
+
+    await _tap(tester, find.text('식후 30분'));
+    await _tap(tester, find.text('다음'));
+
+    await _tap(tester, find.text('30일'));
+    await _tap(tester, find.text('다음'));
+
+    await _tap(tester, find.text('예'));
+    await _tap(tester, find.text('다음'));
+
+    expect(find.text('이대로 저장할까요?'), findsOneWidget);
+    await _tap(tester, find.text('저장'));
+
+    expect(find.text('복약 알림 추가하기'), findsNothing);
+    expect(find.text('혈압약'), findsOneWidget);
+    expect(find.text('아침·저녁 · 식후 30분'), findsOneWidget);
+    expect(find.text('30일 남음'), findsOneWidget);
   });
 }

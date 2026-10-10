@@ -10,6 +10,7 @@ import '../../core/widgets/hestia_card.dart';
 import '../../core/widgets/state_views.dart';
 import '../../models/context_state.dart';
 import '../../models/device.dart';
+import '../../models/medication.dart';
 import '../../models/notification_item.dart';
 import 'home_controller.dart';
 
@@ -45,6 +46,12 @@ class _HomePageState extends State<HomePage> {
     ]);
   }
 
+  /// 복약 관리(목록) 또는 바로 추가 화면을 연 뒤 홈을 다시 읽는다.
+  Future<void> _openMedication(String route) async {
+    await Navigator.of(context).pushNamed(route);
+    if (mounted) await _controller.load();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -62,6 +69,10 @@ class _HomePageState extends State<HomePage> {
                       padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                       children: [
                         _ContextSection(hestiaContext: data.context),
+                        _MedicationSection(
+                          medications: data.medications,
+                          onOpen: _openMedication,
+                        ),
                         _RoomSection(data: data, controller: _controller),
                         _DeviceSection(data: data, controller: _controller),
                         _RecentNotifications(
@@ -293,6 +304,123 @@ class _ContextChip extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 복약 카드. 등록 전에는 [추가하기]만, 등록 후에는 약 목록과 남은 기간.
+class _MedicationSection extends StatelessWidget {
+  const _MedicationSection({required this.medications, required this.onOpen});
+
+  static const _maxRows = 3;
+
+  final List<Medication> medications;
+  final ValueChanged<String> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (medications.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 16),
+        child: HestiaCard(
+          onTap: () => onOpen(AppRoutes.medicationEdit),
+          color: theme.colorScheme.surface,
+          borderColor: theme.colorScheme.outlineVariant,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Row(
+            children: [
+              Icon(Icons.medication_rounded,
+                  size: 32, color: theme.colorScheme.primary),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('복약 알림 추가하기',
+                        style: theme.textTheme.titleMedium),
+                    Text('드시는 약이 있으면 시간에 맞춰 알려드려요',
+                        style: theme.textTheme.bodyMedium),
+                  ],
+                ),
+              ),
+              Icon(Icons.add_circle_outline_rounded,
+                  size: 32, color: theme.colorScheme.primary),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final now = DateTime.now();
+    final shown = medications.take(_maxRows).toList();
+    final hidden = medications.length - shown.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionHeader(
+          '복약',
+          trailing: TextButton(
+            onPressed: () => onOpen(AppRoutes.medications),
+            child: const Text('관리'),
+          ),
+        ),
+        HestiaCard(
+          onTap: () => onOpen(AppRoutes.medications),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final (i, m) in shown.indexed) ...[
+                if (i > 0) const Divider(height: 20),
+                _MedicationLine(medication: m, now: now),
+              ],
+              if (hidden > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text('외 $hidden개', style: theme.textTheme.bodyMedium),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MedicationLine extends StatelessWidget {
+  const _MedicationLine({required this.medication, required this.now});
+
+  final Medication medication;
+  final DateTime now;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final (period, warn) = MedicationLabels.period(medication, now);
+    return Row(
+      children: [
+        Icon(Icons.medication_rounded, color: theme.colorScheme.primary),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(medication.name, style: theme.textTheme.titleMedium),
+              Text(medication.scheduleLabel, style: theme.textTheme.bodyMedium),
+            ],
+          ),
+        ),
+        if (warn) ...[
+          const Icon(Icons.warning_amber_rounded,
+              size: 20, color: HestiaColors.warning),
+          const SizedBox(width: 4),
+        ],
+        Text(
+          period,
+          style: theme.textTheme.titleSmall
+              ?.copyWith(color: warn ? HestiaColors.warning : null),
+        ),
+      ],
     );
   }
 }

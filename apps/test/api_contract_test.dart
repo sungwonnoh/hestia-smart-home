@@ -7,6 +7,7 @@ import 'package:hestia_flutter_test/core/utils/display_labels.dart';
 import 'package:hestia_flutter_test/models/context_state.dart';
 import 'package:hestia_flutter_test/models/device.dart';
 import 'package:hestia_flutter_test/models/home_setup.dart';
+import 'package:hestia_flutter_test/models/medication.dart';
 import 'package:hestia_flutter_test/models/room.dart';
 import 'package:hestia_flutter_test/models/user_preferences.dart';
 import 'package:hestia_flutter_test/repositories/api_hestia_repository.dart';
@@ -46,6 +47,7 @@ void main() {
   final rawPreferences = _response('preferences');
   final rawContext = _response('context_current');
   final rawExplanation = _response('explanation_by_id');
+  final rawMedications = _responseList('medications');
   final notificationId = rawNotifications.first['id'] as String;
   final explanationId = rawExplanation['id'] as String;
 
@@ -65,7 +67,9 @@ void main() {
       ..['POST /api/v1/notifications/$notificationId/ack'] =
           (200, _response('ack'))
       ..['PUT /api/v1/setup'] = (200, rawSetup)
-      ..['PUT /api/v1/preferences'] = (200, rawPreferences);
+      ..['PUT /api/v1/preferences'] = (200, rawPreferences)
+      ..['GET /api/v1/medications'] = (200, rawMedications)
+      ..['POST /api/v1/medications'] = (201, rawMedications.first);
     repo = ApiHestiaRepository(
       ApiClient(baseUrl: 'http://127.0.0.1:${api.port}'),
     );
@@ -183,6 +187,23 @@ void main() {
       expect(prefs.toJson(), _withoutNulls(rawPreferences));
     });
 
+    test('medications: 시점·식사 기준·기간이 그대로 들어온다', () async {
+      final items = await repo.getMedications();
+      expect(items, hasLength(rawMedications.length));
+      for (final (i, m) in items.indexed) {
+        final raw = rawMedications[i];
+        expect(m.id, raw['id']);
+        expect(m.name, raw['name']);
+        // 모르는 값이 조용히 빠지지 않았는지 원본과 비교한다.
+        expect(m.slots.map((s) => s.wireName), raw['slots']);
+        expect(m.mealTiming?.wireName, raw['mealTiming']);
+        expect(m.days, raw['days']);
+        expect(Medication.formatDate(m.startDate!), raw['startDate']);
+        expect(Medication.formatDate(m.endDate!), raw['endDate']);
+        expect(m.refillRequired, raw['refillRequired']);
+      }
+    });
+
     test('ack: 응답을 받아도 예외가 없다', () async {
       await repo.acknowledgeNotification(notificationId);
       expect(api.requests.last.$2, '/api/v1/notifications/$notificationId/ack');
@@ -241,6 +262,21 @@ void main() {
       final (method, path, body) = api.requests.last;
       expect('$method $path', 'PUT /api/v1/preferences');
       expect(jsonDecode(body), _load('requests/preferences.json'));
+    });
+
+    test('복약 추가 JSON', () async {
+      const draft = Medication(
+        name: '혈압약',
+        slots: [DoseSlot.breakfast, DoseSlot.dinner],
+        mealTiming: MealTiming.afterMeal30,
+        days: 30,
+        refillRequired: true,
+      );
+      final saved = await repo.addMedication(draft);
+      final (method, path, body) = api.requests.last;
+      expect('$method $path', 'POST /api/v1/medications');
+      expect(jsonDecode(body), _load('requests/medication.json'));
+      expect(saved.id, rawMedications.first['id']);
     });
 
     test('확인(SEEN) JSON', () async {

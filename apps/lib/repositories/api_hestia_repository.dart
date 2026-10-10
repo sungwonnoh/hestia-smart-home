@@ -6,6 +6,7 @@ import '../models/context_state.dart';
 import '../models/device.dart';
 import '../models/explanation.dart';
 import '../models/home_setup.dart';
+import '../models/medication.dart';
 import '../models/notification_item.dart';
 import '../models/room.dart';
 import '../models/user_preferences.dart';
@@ -115,6 +116,31 @@ class ApiHestiaRepository implements HestiaRepository {
   @override
   Future<void> savePreferences(UserPreferences preferences) async {
     await _client.put('$_api/preferences', preferences.toJson());
+  }
+
+  // ---------------------------------------------------------------- medication
+
+  @override
+  Future<List<Medication>> getMedications() async =>
+      _list(await _client.get('$_api/medications'))
+          .map(Medication.fromJson)
+          .toList();
+
+  @override
+  Future<Medication> addMedication(Medication medication) async =>
+      Medication.fromJson(
+          _map(await _client.post('$_api/medications', medication.toJson())));
+
+  @override
+  Future<Medication> updateMedication(Medication medication) async =>
+      Medication.fromJson(_map(await _client.put(
+          '$_api/medications/${Uri.encodeComponent(medication.id)}',
+          medication.toJson())));
+
+  @override
+  Future<void> deleteMedication(String medicationId) async {
+    await _client
+        .delete('$_api/medications/${Uri.encodeComponent(medicationId)}');
   }
 
   // ---------------------------------------------------------------- polling

@@ -9,6 +9,7 @@ class SettingsPage extends StatelessWidget {
   static const _items = [
     (Icons.meeting_room_rounded, '공간 관리', '사용하는 방과 공간', AppRoutes.settingsRooms),
     (Icons.devices_rounded, '가전 관리', '가전 추가·삭제와 위치', AppRoutes.settingsDevices),
+    (Icons.medication_rounded, '복약 관리', '드시는 약과 복약 알림', AppRoutes.medications),
     (Icons.notifications_active_rounded, '알림 설정', '방해 금지 시간, 민감도, 안전 알림',
         AppRoutes.settingsNotifications),
     (Icons.info_outline_rounded, '시스템 정보', '버전, 연결 상태, 시연 도구', AppRoutes.settingsSystem),

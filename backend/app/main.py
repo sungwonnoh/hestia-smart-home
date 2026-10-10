@@ -15,7 +15,8 @@ from typing import Any, Optional
 
 from fastapi import FastAPI
 
-from .api import context, devices, explanations, health, notifications, preferences, rooms, setup
+from .api import (context, devices, explanations, health, medications, notifications,
+                  preferences, rooms, setup)
 from .config import API_VERSION, Settings
 from .dependencies import build_container
 from .realtime import monitor_ws
@@ -46,7 +47,7 @@ def create_app(settings: Optional[Settings] = None, mqtt: Any = None) -> FastAPI
         lifespan=lifespan,
     )
     for module in (health, rooms, devices, context, notifications,
-                   explanations, preferences, setup):
+                   explanations, preferences, setup, medications):
         app.include_router(module.router, prefix=API_PREFIX)
     app.include_router(monitor_ws.router)
     return app
