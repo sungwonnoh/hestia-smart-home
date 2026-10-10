@@ -61,6 +61,12 @@ GRID_SIZE = 24 * 60 // GRID_STEP  # 96칸
 HYDRATION_GRID_STEP = 5
 HYDRATION_GRID_MAX_MIN = 120
 
+# meal_time 끼니로 보낼 최소 "먹은 날 비율" (days_ratio).
+# 과반의 날에 먹어야 이 사람의 식사 습관으로 본다. 너그럽게 거르고,
+# 알릴지 말지는 Context Engine 이 함께 보내는 days_ratio 로 판단한다.
+# (days_ratio p 인 끼니에 거름 알림을 하면 정상인데도 1-p 의 날에 울린다)
+MEAL_MIN_DAYS_RATIO = 0.5
+
 # gaussian_kde 가 계산 가능한 최소 표본 수 (수학적 하한).
 # 학습 신뢰도를 위한 최소 일수는 실험 없이 정하지 않는다.
 MIN_SAMPLES = 2
@@ -570,19 +576,29 @@ def meal_peaks(
     values: np.ndarray,
     density: list[float],
     weights: np.ndarray | None = None,
-) -> list[dict] | None:
+    dates: list[str] | None = None,
+    min_days_ratio: float | None = MEAL_MIN_DAYS_RATIO,
+) -> tuple[list[dict] | None, list[dict]]:
     """
-    meal_time 의 끼니 구간과 끼니별 predictability (Context Engine 합의).
+    meal_time 의 끼니 구간과 끼니별 통계 (Context Engine 합의).
 
         {"center": 봉우리 칸 시작 분, "from": 구간 시작 분, "to": 구간 끝 분(미포함),
-         "predictability": 그 구간 식사만으로 그린 KDE 의 predictability | null}
+         "predictability": 그 구간 식사만으로 그린 KDE 의 predictability | null,
+         "days_ratio": 그 구간에 식사가 있었던 날 / sample_days,
+         "meals_per_day": 그 구간 식사 수 / sample_days}
 
     - 구간은 발행하는 density 에서 찾는다 (Context Engine 이 같은 density 로 구간 tail 을 계산)
     - 끼니별 predictability 는 구간에 속한 식사만으로 KDE(96칸)를 다시 그려 계산한다
       (전체 meal_time 은 다봉이라 규칙적인 사람도 0.07~0.11 로 낮게 나온다)
     - 그 구간 식사가 2개 미만이거나 KDE 를 그릴 수 없으면 predictability = null
     - from > to 면 자정을 넘는 구간이다
-    - 봉우리가 1개 이하면 None (payload 에 peaks 를 넣지 않는다)
+    - days_ratio < min_days_ratio 인 끼니는 보내지 않는다. 그 시간대는 이웃 끼니에 합치지 않고 비워 둔다
+      (None 이면 거르지 않음). days_ratio / meals_per_day 는 가중치 없이 실제 횟수로 센다
+    - sample_days 는 식사 기록이 있는 날 수다. 하루 종일 식사가 없던 날은 데이터 없는 날과 구별되지 않아 빠진다
+    - meals_per_day > 1 이면 그 구간에 끼니가 여럿 있거나 한 끼가 여러 기록으로 쪼개졌다는 뜻이다
+
+    반환: (peaks, 걸러진 끼니). 봉우리가 1개 이하면 peaks = None (payload 에 넣지 않는다).
+    봉우리가 2개 이상이었으면 거른 뒤 1개면 1개, 0개면 [] 다.
     """
 
     from meal_slots import assign_slots, find_peaks, slot_ranges
@@ -590,14 +606,17 @@ def meal_peaks(
     peaks = find_peaks(density)
 
     if len(peaks) <= 1:
-        return None
+        return None, []
 
     step = TIME_OF_DAY_GRID.grid_step
     values = np.asarray(values, dtype=float)
     slot = assign_slots(values, density, peaks, step)
     w = None if weights is None else np.asarray(weights, dtype=float)
+    dates = np.asarray(dates if dates is not None else [""] * len(values))
+    days = len(set(dates.tolist())) or 1
 
     out = []
+    dropped = []
 
     for k, (peak, (start, end)) in enumerate(zip(peaks, slot_ranges(density, peaks))):
         member = slot == k
@@ -612,14 +631,22 @@ def meal_peaks(
         except InsufficientSamples:
             pred = None
 
-        out.append({
+        entry = {
             "center": int(peak * step),
             "from": int(start * step),
             "to": int(end * step),
             "predictability": pred,
-        })
+            "days_ratio": len(set(dates[member].tolist())) / days,
+            "meals_per_day": int(member.sum()) / days,
+        }
 
-    return out
+        if min_days_ratio is not None and entry["days_ratio"] < min_days_ratio:
+            dropped.append(entry)
+            continue
+
+        out.append(entry)
+
+    return out, dropped
 
 
 def calculate_entropy(
@@ -674,6 +701,7 @@ def build_model(
     hydration_max_min: float = HYDRATION_GRID_MAX_MIN,
     sample_weighting: SampleWeighting | None = None,
     cold_start: ColdStart | None = None,
+    meal_min_days_ratio: float | None = MEAL_MIN_DAYS_RATIO,
 ) -> dict:
     """
     MQTT payload에 들어갈 KDE 모델 부분을 생성한다.
@@ -756,9 +784,17 @@ def build_model(
         }
 
         if name == "meal_time":
-            peaks = meal_peaks(kde_samples.values(items), density, weights)
+            peaks, dropped = meal_peaks(
+                kde_samples.values(items),
+                density,
+                weights,
+                dates=[s.date for s in items],
+                min_days_ratio=meal_min_days_ratio,
+            )
             if peaks is not None:
                 distributions[name]["peaks"] = peaks
+            if dropped:
+                info["meal_peaks_dropped"] = dropped
 
         predictability[name] = calculate_predictability(density)
         meta[name] = info

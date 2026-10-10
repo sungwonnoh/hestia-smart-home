@@ -5,7 +5,7 @@ hestia/model/kde payload 생성과 검증.
       "version": 1, "sent_ts": ..., "src_id": "rpi4", "trained_at": ...,
       "sample_days": ...,
       "distributions": {name: {"grid_min", "grid_step", "density"}},
-                        meal_time 은 끼니가 2개 이상이면 "peaks" 도 있다
+                        meal_time 은 봉우리가 2개 이상이면 "peaks" 도 있다 (걸러져 1개 / 빈 배열 가능)
       "predictability": {name: 0~1}
     }
 
@@ -251,7 +251,7 @@ def validate_distribution(name: str, dist) -> None:
 # 끼니 구간(peaks)을 싣는 distribution
 PEAKS_DISTRIBUTIONS = {"meal_time"}
 
-PEAK_KEYS = {"center", "from", "to", "predictability"}
+PEAK_KEYS = {"center", "from", "to", "predictability", "days_ratio", "meals_per_day"}
 
 
 def _in_arc(start: float, end: float, x: float) -> bool:
@@ -267,19 +267,23 @@ def validate_peaks(name: str, peaks) -> None:
     """
     Context Engine 합의 규칙.
 
-    - 있으면 끼니 2개 이상 (1개 이하면 peaks 를 넣지 않는다)
+    - 배열. 자주 먹지 않는 끼니를 거른 결과라 1개나 빈 배열일 수 있다
+      (원래 봉우리가 1개 이하면 peaks 자체를 넣지 않는다)
     - center / from / to 는 0 이상 1440 미만 분, from > to 면 자정을 넘는 구간
     - center 는 [from, to) 안
     - predictability 는 null 또는 0~1
-    - 구간끼리 겹치지 않는다
+    - days_ratio 는 0~1, meals_per_day 는 0 이상
+    - 구간끼리 겹치지 않는다 (거른 끼니 시간대는 비어 있을 수 있다)
     """
 
-    if not isinstance(peaks, list) or len(peaks) < 2:
-        raise PayloadError(f"{name}.peaks는 끼니 2개 이상의 배열이어야 합니다 (1개 이하면 생략).")
+    if not isinstance(peaks, list):
+        raise PayloadError(f"{name}.peaks는 배열이어야 합니다.")
 
     for i, p in enumerate(peaks):
         if not isinstance(p, dict) or set(p) != PEAK_KEYS:
-            raise PayloadError(f"{name}.peaks[{i}]: center / from / to / predictability만 있어야 합니다.")
+            raise PayloadError(
+                f"{name}.peaks[{i}]: center / from / to / predictability / days_ratio / meals_per_day만 있어야 합니다."
+            )
 
         for key in ("center", "from", "to"):
             v = p[key]
@@ -295,6 +299,12 @@ def validate_peaks(name: str, peaks) -> None:
         pred = p["predictability"]
         if pred is not None and (not _is_number(pred) or not 0 <= pred <= 1):
             raise PayloadError(f"{name}.peaks[{i}].predictability는 null 또는 0~1이어야 합니다: {pred!r}")
+
+        if not _is_number(p["days_ratio"]) or not 0 <= p["days_ratio"] <= 1:
+            raise PayloadError(f"{name}.peaks[{i}].days_ratio는 0~1이어야 합니다: {p['days_ratio']!r}")
+
+        if not _is_number(p["meals_per_day"]) or p["meals_per_day"] < 0:
+            raise PayloadError(f"{name}.peaks[{i}].meals_per_day는 0 이상이어야 합니다: {p['meals_per_day']!r}")
 
     for i, a in enumerate(peaks):
         for j, b in enumerate(peaks[i + 1:], start=i + 1):

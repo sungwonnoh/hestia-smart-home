@@ -49,9 +49,9 @@ t0 adapter    ─┘
 "meal_time": {
   "grid_min": 0, "grid_step": 15, "density": [...],
   "peaks": [
-    {"center": 465,  "from": 45,  "to": 615, "predictability": 0.41},
-    {"center": 675,  "from": 615, "to": 900, "predictability": 0.54},
-    {"center": 1065, "from": 900, "to": 45,  "predictability": 0.65}
+    {"center": 465,  "from": 45,  "to": 615, "predictability": 0.41, "days_ratio": 0.87, "meals_per_day": 0.87},
+    {"center": 675,  "from": 615, "to": 900, "predictability": 0.54, "days_ratio": 0.67, "meals_per_day": 0.67},
+    {"center": 1065, "from": 900, "to": 45,  "predictability": 0.65, "days_ratio": 0.76, "meals_per_day": 0.76}
   ]
 }
 ```
@@ -61,10 +61,18 @@ t0 adapter    ─┘
 | `center` | 그 끼니에 식사가 가장 몰린 칸의 시작 분 (구간 가운데가 아님) |
 | `from` / `to` | 끼니 구간, 자정 기준 분. `from` 포함 · `to` 미포함, `from > to` 면 자정을 넘음 |
 | `predictability` | 그 구간 식사만으로 다시 그린 KDE(96칸)의 predictability. 식사 2개 미만이면 `null` |
+| `days_ratio` | 그 구간에 식사가 있었던 날 / `meal_time` sample_days. 끼니를 먹는 날의 비율 |
+| `meals_per_day` | 그 구간 식사 수 / sample_days. 1보다 크면 구간에 끼니가 여럿이거나 한 끼가 쪼개져 기록됨 |
 
 - 끼니 = 발행하는 `meal_time` density 에서 균등분포(1/96)보다 높은 봉우리, 경계 = 봉우리 사이 최저점 (고정 식사 시각 없음)
-- 구간은 하루를 빈틈없이 나눕니다 (앞 끼니 `to` == 다음 끼니 `from`)
-- 봉우리가 1개 이하면 `peaks` 를 넣지 않습니다 → Context Engine 은 전체 predictability 사용
+- **`days_ratio` < 0.5 인 끼니는 보내지 않습니다** (`MEAL_MIN_DAYS_RATIO`, 과반의 날에 먹어야 식사 습관).
+  그 시간대는 이웃 끼니에 합치지 않고 비워 둡니다 → Context Engine 은 그 시간대에 식사 판단을 하지 않음.
+  거른 끼니는 `meta.meal_time.meal_peaks_dropped` 에 남습니다
+- 알릴지 말지는 Context Engine 이 `days_ratio` 로 판단합니다. `days_ratio` p 인 끼니에 거름 알림을 하면
+  그 사람에게 정상인데도 1−p 의 날에 울립니다 (0.67 → 3일에 한 번, 0.86 → 일주일에 한 번)
+- `days_ratio` / `meals_per_day` 는 가중치 없이 실제 횟수로 셉니다. sample_days 는 식사 기록이 있는 날만 셉니다
+- 봉우리가 1개 이하면 `peaks` 를 넣지 않습니다 → Context Engine 은 전체 predictability 사용.
+  봉우리가 2개 이상이었으면 거른 뒤 1개면 1개, 0개면 `[]` 를 보냅니다
 - 끼니 수는 사람마다 다릅니다 (CASAS: Cairo 3, Aruba 2, Tulum2 2)
 - 임계값(`[thresholds.meal] predictability_min`)은 Context Engine 정책입니다
 
