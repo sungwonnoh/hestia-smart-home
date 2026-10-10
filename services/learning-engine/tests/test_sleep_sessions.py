@@ -311,3 +311,83 @@ def test_15_5_model_payload_has_sleep_and_wake():
     assert payload["trained_at"] > 0 and payload["sample_days"] == 4
     assert {"sleep_time", "wake_time"} <= set(payload["distributions"])
     assert {"sleep_time", "wake_time"} <= set(payload["predictability"])
+
+
+# ============================================================ awake_areas 로 수면 잇기
+
+
+def night_with_wake(gap_end, awake_areas, extra=()):
+    """23:00 잠듦 → 02:00 깸 → gap_end 다시 잠 (awake_areas) → 07:00 기상"""
+    start2 = ev("sleep_start", gap_end, area="bedroom")
+    if awake_areas != "missing":
+        start2["awake_areas"] = awake_areas
+    return [
+        ev("sleep_start", "2026-09-01 23:00", area="bedroom", awake_areas=[]),
+        ev("sleep_end", "2026-09-02 02:00"),
+        start2,
+        ev("sleep_end", "2026-09-02 07:00"),
+        *extra,
+    ]
+
+
+@pytest.mark.parametrize("awake_areas", [[], ["bathroom"]])
+def test_long_wake_in_bed_or_bathroom_is_same_night(awake_areas):
+    """새벽에 2시간 깨어 있었어도 침실·화장실만 있었으면 하룻밤이다 (CASAS Milan 사례)."""
+    series, classified = samples_from_events(night_with_wake("2026-09-02 04:00", awake_areas))
+    assert [c.kind for c in classified] == [NIGHT]
+    assert classified[0].session.parts == 2
+    assert [hhmm(x) for x in series["sleep_time"]] == ["23:00"]
+    assert [hhmm(x) for x in series["wake_time"]] == ["07:00"]
+
+
+@pytest.mark.parametrize("awake_areas", [["kitchen"], ["bathroom", "living"], "missing", None, "x"])
+def test_got_up_or_unknown_falls_back_to_gap(awake_areas):
+    """실제로 일어나 활동했거나(주방·거실) 모르면 간격 규칙(15분) — 2시간이면 따로."""
+    series, classified = samples_from_events(night_with_wake("2026-09-02 03:30", awake_areas))
+    assert len(classified) == 2
+    # 하룻밤이 쪼개져 더 긴 뒤쪽(03:30~07:00)이 밤잠이 된다 — 취침 시각이 03:30 으로 틀어지는 경우
+    assert [hhmm(x) for x in series["sleep_time"]] == ["03:30"]
+    assert classified[0].session.awake_areas is None or classified[0].session.awake_areas == ()
+
+
+def test_short_gap_still_merges_even_after_kitchen():
+    """잇는 방향으로만 쓴다 — 주방에 다녀왔어도 15분 이내면 같은 수면 (새벽 물 마시기)."""
+    _, classified = samples_from_events(night_with_wake("2026-09-02 02:10", ["kitchen"]))
+    assert [c.kind for c in classified] == [NIGHT] and classified[0].session.parts == 2
+
+
+def test_nap_after_real_wake_is_not_merged():
+    """아침에 일어나 주방에 갔다가 낮잠 — 밤잠에 붙지 않는다."""
+    events = [
+        ev("sleep_start", "2026-09-01 23:00", area="bedroom", awake_areas=[]),
+        ev("sleep_end", "2026-09-02 07:00"),
+        ev("sleep_start", "2026-09-02 14:00", area="bedroom", awake_areas=["kitchen", "living"]),
+        ev("sleep_end", "2026-09-02 15:00"),
+        ev("sleep_start", "2026-09-02 23:00", area="bedroom", awake_areas=["kitchen"]),
+        ev("sleep_end", "2026-09-03 07:00"),
+    ]
+    _, classified = samples_from_events(events)
+    assert [c.kind for c in classified] == [NIGHT, NAP, NIGHT]
+
+
+def test_awake_areas_parsed_and_kept_on_session():
+    sessions, _ = sessions_from_events([
+        ev("sleep_start", "2026-09-01 23:00", area="bedroom", awake_areas=["bathroom"]),
+        ev("sleep_end", "2026-09-02 07:00"),
+    ])
+    assert sessions[0].awake_areas == ("bathroom",)
+
+
+def test_resume_areas_configurable():
+    events = night_with_wake("2026-09-02 04:00", ["living"])
+    assert len(samples_from_events(events)[1]) == 2
+    merged = merge_sessions(sessions_from_events(events)[0], resume_areas=frozenset({"bathroom", "living"}))
+    assert len(merged) == 1
+    off = merge_sessions(sessions_from_events(night_with_wake("2026-09-02 04:00", []))[0], resume_areas=None)
+    assert len(off) == 2
+
+
+def test_casas_sessions_have_unknown_awake_areas():
+    """CASAS 에는 이 정보가 없다 — 기존 결과(간격 + 화장실 라벨)가 바뀌지 않는다."""
+    s = session("2026-09-01 23:00", "2026-09-02 02:00")
+    assert s.awake_areas is None
