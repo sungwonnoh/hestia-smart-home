@@ -530,7 +530,11 @@ def test_energy_jitter_does_not_republish(c):
 
 def test_all_contexts_for_periodic_publish(c):
     c.presence("vs-03", True)
-    assert len(c.engine.all_contexts()) == 5
+    assert len(c.engine.all_contexts()) == 6
+    names = {ctx.name for ctx in c.engine.all_contexts()}
+    assert names == {
+        "presence", "away", "occupancy", "activity", "suppression", "day",
+    }
 
 
 def test_payload_shape(c):

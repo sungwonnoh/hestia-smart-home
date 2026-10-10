@@ -12,6 +12,8 @@ from hestia_engine.model import (
     tail_probability,
     validate_distribution,
     validate_kde,
+    MealPeak,
+    peak_tail,
 )
 
 
@@ -29,6 +31,20 @@ def peaked(center_min: int, step: int = 15, width: int = 2) -> dict:
         density[i] = 1.0
     total = sum(density)
     return {"grid_min": 0, "grid_step": step, "density": [d / total for d in density]}
+
+
+def peak(center=480, from_=300, to=660, pred=0.54,
+         days=1.0, mpd=1.0) -> dict:
+    return {"center": center, "from": from_, "to": to,
+            "predictability": pred, "days_ratio": days,
+            "meals_per_day": mpd}
+
+
+def with_peaks(peaks: list[dict], density: list[float] | None = None) -> dict:
+    d = uniform() if density is None else {
+        "grid_min": 0, "grid_step": 15, "density": density
+    }
+    return {**d, "peaks": peaks}
 
 
 def kde_payload(**dists) -> dict:
@@ -259,3 +275,160 @@ def test_distribution_names():
     assert set(DISTRIBUTIONS) == {
         "wake_time", "sleep_time", "meal_time", "hydration_lag"
     }
+
+
+# ============================================================ peaks
+
+
+def test_peaks_parsed():
+    s = ModelStore()
+    s.apply(msg(payload=kde_payload(meal_time=with_peaks([peak()]))))
+    ps = s.peaks()
+    assert len(ps) == 1
+    assert ps[0].center == 480
+    assert ps[0].predictability == 0.54
+    assert ps[0].days_ratio == 1.0
+
+
+def test_peaks_none_when_absent():
+    """봉우리 1개 이하면 배치가 필드를 생략한다."""
+    s = ModelStore()
+    s.apply(msg())
+    assert s.peaks() is None
+
+
+def test_peaks_empty_is_not_none():
+    """빈 배열은 '판단할 끼니가 없다' — 필드 부재와 구별된다."""
+    s = ModelStore()
+    s.apply(msg(payload=kde_payload(meal_time=with_peaks([]))))
+    assert s.peaks() == ()
+
+
+def test_contains_normal():
+    p = MealPeak(480, 300, 660, None, 1.0, 1.0)
+    assert p.contains(300) is True       # from 포함
+    assert p.contains(660) is False      # to 미포함
+    assert p.contains(290) is False
+
+
+def test_contains_wraps_midnight():
+    """자정을 넘는 구간은 from > to 로 표현된다."""
+    p = MealPeak(1140, 1020, 300, None, 1.0, 1.0)
+    assert p.contains(1140) is True
+    assert p.contains(60) is True        # 01:00 — 자정 넘어
+    assert p.contains(600) is False
+
+
+def test_bins_unwraps():
+    """순환 구간의 칸 순서는 from 부터 이어져야 한다.
+
+    range(n) 순서로 모으면 [0..11, 68..95] 가 되어 '지금 이후' 가
+    뒤집힌다.
+    """
+    p = MealPeak(1140, 1020, 180, None, 1.0, 1.0)
+    bins = p.bins(15, 96)
+    assert bins[0] == 68                 # 17:00
+    assert bins[-1] == 11                # 02:45
+    assert bins.index(95) < bins.index(0)
+
+
+def test_bins_normal():
+    p = MealPeak(480, 300, 660, None, 1.0, 1.0)
+    bins = p.bins(15, 96)
+    assert bins[0] == 20                 # 05:00
+    assert bins[-1] == 43                # 10:45
+
+
+# ============================================================ peak_tail
+
+
+def test_peak_tail_ignores_other_meals():
+    """전체 tail 은 뒤 끼니 질량이 섞여 '늦음' 을 못 잡는다.
+
+    아침이 늦었는데 저녁이 뒤에 남아 크게 나온다.
+    구간 안에서 다시 정규화하면 작아진다.
+    """
+    density = [0.0] * 96
+    for i in range(32, 36):              # 08:00~09:00 아침
+        density[i] = 0.05
+    for i in range(72, 76):              # 18:00~19:00 저녁
+        density[i] = 0.20
+
+    d = {"grid_min": 0, "grid_step": 15, "density": density}
+    morning = MealPeak(510, 300, 660, 0.5, 1.0, 1.0)
+
+    assert tail_probability(d, 525) > 0.8        # 08:45 — 저녁이 섞인다
+    assert peak_tail(d, morning, 525) < 0.3      # 구간 안에서는 작다
+
+
+def test_peak_tail_outside_is_one():
+    d = uniform()
+    p = MealPeak(480, 300, 660, None, 1.0, 1.0)
+    assert peak_tail(d, p, 1200) == 1.0
+
+
+def test_peak_tail_at_start_is_one():
+    d = uniform()
+    p = MealPeak(480, 300, 660, None, 1.0, 1.0)
+    assert peak_tail(d, p, 300) == pytest.approx(1.0)
+
+
+def test_peak_tail_wraps():
+    """자정을 넘는 구간에서도 순서가 맞아야 한다."""
+    d = uniform()
+    p = MealPeak(1140, 1020, 180, None, 1.0, 1.0)
+    assert peak_tail(d, p, 1020) == pytest.approx(1.0)      # 17:00 — 시작
+    assert peak_tail(d, p, 60) < 0.3                        # 01:00 — 거의 끝
+
+
+# ============================================================ peaks 검증
+
+
+def test_bad_peaks_dropped_but_dist_kept():
+    """봉우리가 틀렸다고 모델 전체를 거부하면 다음 배치까지 판단 기준이 없다.
+
+    분포 자체는 멀쩡하므로 전체 tail 로 떨어지는 편이 낫다.
+    """
+    bad = with_peaks([peak(center=100)])          # center 가 구간 밖
+    s = ModelStore()
+    assert s.apply(msg(payload=kde_payload(meal_time=bad))) is True
+    assert s.peaks() is None
+    assert s.distribution("meal_time") is not None
+
+
+def test_overlapping_peaks_dropped():
+    """겹치면 '지금이 어느 구간인가' 가 모호해진다."""
+    bad = with_peaks([peak(from_=300, to=660), peak(center=700, from_=600, to=900)])
+    s = ModelStore()
+    s.apply(msg(payload=kde_payload(meal_time=bad)))
+    assert s.peaks() is None
+
+
+def test_gap_between_peaks_allowed():
+    """자주 먹지 않는 끼니를 배치가 걸러낸 자리다. 빈틈은 괜찮다."""
+    ok = with_peaks([
+        peak(center=480, from_=300, to=660),
+        peak(center=1140, from_=1020, to=1320),
+    ])
+    s = ModelStore()
+    s.apply(msg(payload=kde_payload(meal_time=ok)))
+    assert len(s.peaks()) == 2
+
+
+def test_predictability_null_allowed():
+    """식사 2개 미만이면 배치가 null 로 보낸다."""
+    s = ModelStore()
+    s.apply(msg(payload=kde_payload(meal_time=with_peaks([peak(pred=None)]))))
+    assert s.peaks()[0].predictability is None
+
+
+def test_days_ratio_out_of_range_dropped():
+    s = ModelStore()
+    s.apply(msg(payload=kde_payload(meal_time=with_peaks([peak(days=1.5)]))))
+    assert s.peaks() is None
+
+
+def test_center_out_of_day_dropped():
+    s = ModelStore()
+    s.apply(msg(payload=kde_payload(meal_time=with_peaks([peak(center=1500)]))))
+    assert s.peaks() is None

@@ -50,6 +50,9 @@ class T0Entry:
     confidence: float | None = None  # 0.9 / 0.9 / 0.6
     awake_areas: tuple[str, ...] | None = None
 
+    # meal 전용
+    eat_t0: float | None = None      # 처음 EATING 에 들어간 시각
+
 
 @runtime_checkable
 class T0Log(Protocol):
@@ -129,6 +132,7 @@ class MealSession:
     opened_state: str
     last_active_at: float          # 묶음 상태였던 마지막 시각
     prompted: bool = False
+    eat_t0: float | None = None    # 처음 EATING 에 들어간 시각
 
 
 class MealFSM:
@@ -152,18 +156,23 @@ class MealFSM:
         self._log = t0log
         self.session: MealSession | None = None
         self._timed_out = False        # 타임아웃 후 재개 차단
-        self.on_close: Callable[[float], None] | None = None
+        self.on_close: Callable[[MealSession, float], None] | None = None
 
     @property
     def t0(self) -> float | None:
         return self.session.t0 if self.session else None
 
-    def update(self, state: str, in_meal_area: bool = False) -> list[tuple[str, float]]:
+    def update(
+            self, state: str, in_meal_area: bool = False,
+            since: float | None = None,
+    ) -> list[tuple[str, float]]:
         """activity 상태를 받아 묶음을 열거나 닫는다. 예약할 타이머를 돌려준다.
 
-        in_meal_area 는 '주방에 아직 있는가'다. 조리가 끝나고 EATING 판정이
+        in_meal_area 는 '식사 구역에 아직 있는가'다. 조리가 끝나고 EATING 판정이
         서기 전 구간은 KITCHEN_MISC 인데, 그것으로 묶음을 끊으면
         COOKING -> EATING 사이에서 t0 가 리셋된다.
+
+        since 는 그 상태가 시작된 시각(activity.since)이다. eat_t0 에 쓴다.
         """
         now = self._clock.now()
         timers: list[tuple[str, float]] = []
@@ -174,20 +183,19 @@ class MealFSM:
         if state in open_states:
             if self.session is None:
                 if self._timed_out:
-                    # 전력이 꺼지기 전까지 다시 열지 않는다.
-                    # 조리기구가 켜진 채라 _evidence_t0 가 같은 시각을 돌려주고,
-                    # 같은 t0 가 2시간마다 쌓이면 KDE 분포가 왜곡된다.
                     return timers
                 if not self._open(state, now):
                     return timers       # 근거 시각이 없어 열지 못함
             elif now - self.session.t0 >= self._timeout():
-                # 2시간째 조리 중일 리 없다. 센서가 켜진 채 방치됐거나
-                # 판정이 고착된 것이다. 닫되 새로 열지 않는다.
                 self._close(now, use_now=True)
                 self._timed_out = True
                 return timers
             else:
                 self.session.last_active_at = now
+
+            if state == "EATING" and self.session.eat_t0 is None:
+                self.session.eat_t0 = since if since is not None else now
+            
             timers.append(("meal-timeout", self.session.t0 + self._timeout()))
             return timers
 
@@ -266,18 +274,18 @@ class MealFSM:
                     source="sensor",
                     prompted=s.prompted,
                     duration_sec=duration,
+                    eat_t0=s.eat_t0,
                 )
             )
-        log.debug("식사 묶음 종료 t0=%s duration=%.0f", s.t0, duration)
-
+        log.debug(
+            "식사 묶음 종료 t0=%s eat_t0=%s duration=%.0f", 
+            s.t0, s.eat_t0, duration
+        )
         if self.on_close is not None:
-            self.on_close(s.t0)
+            self.on_close(s, now if use_now else s.last_active_at)
 
     def _evidence_t0(self, state: str, now: float) -> float | None:
         """근거가 생긴 시각을 t0 로 쓴다. 상태가 바뀐 시각이 아니다.(찾지 못하면 None-retained)
-
-        인덕션을 켠 것은 09:20:00 이고 COOKING 판정은 그 뒤다.
-        판정 시각을 쓰면 t0 가 밀리고 KDE 분포가 통째로 틀어진다.
         """
         lookback = float(
             self._config.value("fsm", "meal", "cooking_lookback_sec", default=7200)
@@ -285,7 +293,8 @@ class MealFSM:
 
         starts = [
             st.on_since
-            for st in self._world.sensors_by_role("MEAL")
+            for role in ("MEAL", "MEAL_HEAT")
+            for st in self._world.sensors_by_role(role)
             if isinstance(st, PowerState)
             and st.on_since is not None
             and now - st.on_since <= lookback
@@ -293,10 +302,12 @@ class MealFSM:
         if starts:
             return min(starts)
 
-        # EATING 으로 바로 열렸거나 전력 근거가 없으면 주방 체류 시작 시각
-        dwell = self._world.dwell_sec("kitchen")
-        if dwell > 0 :
-            return now - dwell
+        # 전력 근거가 없으면 주방 체류 시작 시각
+        meal_areas = self._config.areas_with_role("MEAL")
+        dwells = [self._world.dwell_sec(a) for a in meal_areas]
+        best = max(dwells, default=0.0)
+        if best > 0:
+            return now - best
 
         return None
 
@@ -383,8 +394,13 @@ class DayFSM:
         }
         for e in self._log.of_date(today):
             key = f"{e.type}s"
-            if key in buckets:
-                buckets[key].append(e.t0)
+            if key not in buckets:
+                continue
+            # meals 는 eat_t0 기준이다. 조리만 하고 안 먹은 묶음은
+            # eat_t0 가 없으니 끼니로 세지 않는다.
+            ts = e.eat_t0 if e.type == "meal" else e.t0
+            if ts is not None:
+                buckets[key].append(ts)
 
         self.state = DayState(
             name="day", since=self._clock.now(), date=today,
@@ -402,14 +418,19 @@ class DayFSM:
         """정수기 급수."""
         self._append("hydrations", "hydration", prompted)
 
-    def note_meal(self, t0: float) -> None:
-        """MealFSM 이 묶음을 닫을 때 호출.
-           t0 로그는 MealFSM 이 발행한다.
+    def note_meal(self, session: Any, closed_at: float) -> None:
+        """MealFSM 이 묶음을 닫을 때 호출. t0 로그는 MealFSM 이 발행.
+           먹은 시각(eat_t0) 기준으로.
         """
+        if session.eat_t0 is None:
+            return
+
         self._roll_day(self._clock.now())
-        if day_key(t0) != self.state.date:
+        if day_key(session.eat_t0) != self.state.date:
             return                       # 자정을 넘긴 묶음 — 어제 것이다
-        self.state = _replace(self.state, meals=(*self.state.meals, t0))
+        self.state = _replace(
+            self.state, meals=(*self.state.meals, session.eat_t0)
+        )
 
     def note_medication(self, prompted: bool = False) -> None:
         """복약은 이벤트로 판정할 수 없다 — ack 로만 확인한다 (명세)."""

@@ -13,7 +13,7 @@ from typing import Any
 from .clock import Clock
 from .config import Config
 from .context import AwayContext, OccupancyContext, SuppressionContext
-from .model import ModelStore, query
+from .model import MealPeak, ModelStore, peak_tail, query
 from .timeutil import minutes_since_midnight
 
 log = logging.getLogger(__name__)
@@ -62,6 +62,11 @@ class InterventionPolicy:       # 개입 관련 정책
         self._config = config
         self._store = store
 
+    @property
+    def store(self) -> ModelStore:
+        """시나리오가 peaks 를 읽는다."""
+        return self._store
+
     def evaluate_meal(
         self,
         away: AwayContext,
@@ -69,7 +74,8 @@ class InterventionPolicy:       # 개입 관련 정책
         suppression: SuppressionContext,
         meal_done: bool,
         *,
-        scenario: str = "MEDICATION_PROMPT",
+        peak: MealPeak | None = None,
+        scenario: str = "MEAL_PROMPT",
     ) -> Decision:
         """식사 시각이 평소보다 이상하게 늦은가."""
         return self._evaluate(
@@ -81,6 +87,7 @@ class InterventionPolicy:       # 개입 관련 정책
             suppression=suppression,
             done=meal_done,
             scenario=scenario,
+            peak=peak,
         )
 
     def evaluate_wake(
@@ -118,6 +125,7 @@ class InterventionPolicy:       # 개입 관련 정책
         done: bool,                         # 오늘 이미 했는지
         scenario: str,                      # 억제 예외 확인용 시나리오 이름, 예: "MEDICATION_PROMPT"
         since: float | None = None,         # 상대 분포의 기준 시각
+        peak: MealPeak | None = None,       # 끼니 구간. 주면 그 안에서만 본다
     ) -> Decision:
         now = self._clock.now()
         factors: dict[str, Any] = {}        # 판단 근거를 쌓는 dict
@@ -158,8 +166,20 @@ class InterventionPolicy:       # 개입 관련 정책
             return Decision(False, SUPPRESSED, kind, factors=factors)
 
         # 분포 값 꺼내기
-        tail = result["tail_probability"]
-        pred = result["predictability"]
+        if peak is None:
+            tail = result["tail_probability"]
+            pred = result["predictability"]
+        else:
+            # 구간 안에서 다시 정규화한다. 하루 전체 기준이면
+            # 아침 봉우리를 한참 지나도 저녁 질량 때문에 tail 이 크다.
+            dist = self._store.distribution(dist_name)
+            tail = peak_tail(dist, peak, minutes)
+            pred = peak.predictability
+            factors["peak_center"] = peak.center
+            factors["peak_from"] = peak.from_
+            factors["peak_to"] = peak.to
+            factors["days_ratio"] = peak.days_ratio
+
         factors["tail_probability"] = round(tail, 4)
         factors["predictability"] = None if pred is None else round(pred, 4)
 
@@ -173,13 +193,13 @@ class InterventionPolicy:       # 개입 관련 정책
             )
         )
 
-        # ⑥ 평소 시각이면 개입하지 않는다
-        if tail >= tail_max:
-            return Decision(False, TIME_NORMAL, kind, tail, pred, 0.0, factors)
-
-        # ⑦ 불규칙한 사용자
+        # ⑥ 불규칙한 사용자 — 비교 기준 자체가 없다
         if pred is None or pred < pred_min:
             return Decision(False, PATTERN_UNRELIABLE, kind, tail, pred, 0.0, factors)
+
+        # ⑦ 평소 시각이면 개입하지 않는다
+        if tail >= tail_max:
+            return Decision(False, TIME_NORMAL, kind, tail, pred, 0.0, factors)
 
         # 개입 여부 판단 결과
         return Decision(

@@ -50,6 +50,7 @@ SUBSCRIBE = (
     "hestia/node/+/status",
     "hestia/model/+",
     "hestia/registry/devices",
+    "hestia/registry/medications",
     "hestia/system/profile",
 )
 

@@ -356,3 +356,109 @@ def test_every_class_constructs(topic, payload, expected):
     """
     msg = go(topic, payload)
     assert isinstance(msg, expected), f"{topic} {payload.get('type') or payload.get('device_type')}"
+
+
+# ============================================================ 복약
+
+
+def med_payload(*meds: dict) -> dict:
+    return {
+        "version": 1, "sent_ts": 1790296798, "src_id": "rpi5-api",
+        "medications": list(meds),
+    }
+
+
+def med(**over) -> dict:
+    base = {
+        "id": "med-08a0b745",
+        "name": "감기약",
+        "schedule": {"type": "after_meal", "delay_min": 30},
+        "start_date": "2026-10-09",
+        "days": 5,
+        "end_date": "2026-10-13",
+        "refill_notice": False,
+    }
+    return {**base, **over}
+
+
+def test_medication_after_meal():
+    msg = go("hestia/registry/medications", med_payload(med()))
+    m = msg.medications[0]
+    assert m.name == "감기약"
+    assert m.schedule.type == "after_meal"
+    assert m.schedule.delay_min == 30
+    assert m.schedule.times == ()
+
+
+def test_after_meal_delay_defaults():
+    """식후 몇 분인지 안 적어도 약은 먹어야 한다."""
+    p = med_payload(med(schedule={"type": "after_meal"}))
+    assert go("hestia/registry/medications", p).medications[0].schedule.delay_min == 30
+
+
+def test_fixed_times_become_minutes():
+    """문자열로 두면 비교할 때마다 파싱한다. 받을 때 한 번만 한다."""
+    p = med_payload(med(schedule={"type": "fixed", "times": ["20:00", "08:00"]}))
+    m = go("hestia/registry/medications", p).medications[0]
+    assert m.schedule.times == (480, 1200)        # 정렬된다
+    assert m.schedule.delay_min == 0
+
+
+def test_bad_time_format_dropped():
+    for bad in ("8시", "25:00", "08:70", ""):
+        p = med_payload(med(schedule={"type": "fixed", "times": [bad]}))
+        assert go("hestia/registry/medications", p) is None
+
+
+def test_fixed_without_times_dropped():
+    p = med_payload(med(schedule={"type": "fixed"}))
+    assert go("hestia/registry/medications", p) is None
+
+
+def test_unknown_schedule_type_dropped():
+    p = med_payload(med(schedule={"type": "interval", "hours": 12}))
+    assert go("hestia/registry/medications", p) is None
+
+
+def test_reversed_dates_dropped():
+    """조용히 두면 '왜 알림이 안 오지' 가 된다."""
+    p = med_payload(med(start_date="2026-10-13", end_date="2026-10-09"))
+    assert go("hestia/registry/medications", p) is None
+
+
+def test_bad_date_format_dropped():
+    p = med_payload(med(start_date="2026/10/09"))
+    assert go("hestia/registry/medications", p) is None
+
+
+def test_days_mismatch_kept(caplog):
+    """end_date 를 따른다 — 날짜 계산을 양쪽에서 하면 경계일이 엇갈린다."""
+    p = med_payload(med(days=7))                  # 실제 범위는 5일
+    with caplog.at_level("WARNING"):
+        msg = go("hestia/registry/medications", p)
+    assert msg is not None
+    assert msg.medications[0].end_date == "2026-10-13"
+    assert "어긋남" in caplog.text
+
+
+def test_days_optional():
+    p = med_payload(med())
+    del p["medications"][0]["days"]
+    assert go("hestia/registry/medications", p).medications[0].days == 0
+
+
+def test_several_medications():
+    p = med_payload(
+        med(),
+        med(id="med-3f91c2d0", name="혈압약", refill_notice=True,
+            schedule={"type": "fixed", "times": ["08:00", "20:00"]},
+            start_date="2026-10-09", days=30, end_date="2026-11-07"),
+    )
+    msg = go("hestia/registry/medications", p)
+    assert len(msg.medications) == 2
+    assert msg.medications[1].refill_notice is True
+
+
+def test_empty_list_is_valid():
+    """약을 다 지운 상태. 필드 부재와 달리 '없다' 는 유효한 등록이다."""
+    assert go("hestia/registry/medications", med_payload()).medications == ()

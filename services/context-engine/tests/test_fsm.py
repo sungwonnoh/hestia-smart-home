@@ -253,6 +253,43 @@ def test_fsm_does_not_change_activity(c):
     assert c.engine.activity.state == before
 
 
+def test_eat_t0_recorded(c):
+    """먹기 시작 시각을 따로 남긴다. 조리 시작보다 규칙적이다."""
+    c.presence("vs-04", True)
+    c.at(MORNING + 100).power("vs-06", 1180, "ON")
+    c.at(MORNING + 1000).power("vs-06", 3, "STANDBY")
+    c.at(MORNING + 1300).presence("vs-04", True, energy=12)   # EATING
+    c.at(MORNING + 1400).presence("vs-04", False)             # 주방 이탈
+    c.at(MORNING + 2100).tick()                               # grace 600 초과
+
+    e = c.t0log.of_type("meal")[0]
+    assert e.t0 == MORNING + 100          # 인덕션 ON
+    assert e.eat_t0 is not None
+    assert e.eat_t0 > e.t0
+
+
+def test_eat_t0_null_when_only_cooked(c):
+    """조리만 하고 먹지 않으면 null 이다. 배치가 이걸로 거른다."""
+    c.presence("vs-04", True)
+    c.at(MORNING + 100).power("vs-06", 1180, "ON")
+    c.at(MORNING + 400).power("vs-06", 3, "STANDBY")
+    c.at(MORNING + 500).presence("vs-04", False)
+    c.at(MORNING + 1200).tick()           # grace 만료
+
+    e = c.t0log.of_type("meal")[0]
+    assert e.eat_t0 is None
+
+
+def test_microwave_opens_session(c):
+    """전자레인지만 쓴 끼니도 t0 가 전력 시각이다."""
+    c.presence("vs-04", True)
+    c.at(MORNING + 100).power("vs-14", 800, "ON")
+    c.at(MORNING + 220).power("vs-14", 2, "OFF")
+    c.at(MORNING + 500).presence("vs-04", True, energy=12)
+
+    assert c.meal.t0 == MORNING + 100
+
+
 # ============================================================ wake FSM
 
 

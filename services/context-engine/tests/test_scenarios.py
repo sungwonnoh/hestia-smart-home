@@ -210,4 +210,3 @@ def test_fault_recovers():
     _, engine, _, _ = play("fault.jsonl")
     assert engine.context.away.state == "HOME"
     assert engine.context.presence.user_area == "living"
-    

@@ -56,12 +56,13 @@ def late_model(predictability: float = 0.33):
 
 
 def evaluate(policy, *, away="HOME", occupancy="SINGLE",
-             suppressed=False, done=False):
+             suppressed=False, done=False, peak=None):
     pol, _ = policy
     return pol.evaluate_meal(
         ctx_away(away), ctx_occupancy(occupancy),
         ctx_suppression(suppressed, "AWAY" if suppressed else None),
         meal_done=done,
+        peak=peak,
     )
 
 
@@ -225,3 +226,108 @@ def test_ab_same_time_different_distribution(policy):
     assert a.candidate is True
     assert b.candidate is False
     assert b.reason == TIME_NORMAL
+
+
+# ============================================================ 끼니 구간
+
+
+def peaks_model(peaks: list[dict], predictability: float = 0.33):
+    """세 끼 분포 — 08:00 아침, 12:30 점심, 18:30 저녁."""
+    density = [0.0] * 96
+    for i in range(30, 34):                 # 07:30~08:30
+        density[i] = 0.05
+    for i in range(48, 52):                 # 12:00~13:00
+        density[i] = 0.05
+    for i in range(72, 76):                 # 18:00~19:00
+        density[i] = 0.15
+
+    payload = kde_payload(meal_time={
+        "grid_min": 0, "grid_step": 15,
+        "density": density, "peaks": peaks,
+    })
+    payload["predictability"] = {"meal_time": predictability}
+    return msg(payload=payload)
+
+
+MORNING_PEAK = {"center": 480, "from": 390, "to": 660,
+                "predictability": 0.54, "days_ratio": 1.0,
+                "meals_per_day": 1.0}
+
+
+def test_whole_day_tail_misses_late_breakfast(policy):
+    """구간 없이 보면 아침이 늦어도 저녁 질량이 남아 '평소' 가 된다.
+
+    끼니를 가르는 이유 자체다.
+    """
+    pol, store = policy
+    store.apply(peaks_model([MORNING_PEAK]))
+
+    assert evaluate(policy).reason == TIME_NORMAL
+
+
+def test_peak_catches_late_breakfast(policy):
+    """같은 시각, 같은 분포. 아침 구간 안에서 보면 늦었다."""
+    pol, store = policy
+    store.apply(peaks_model([MORNING_PEAK]))
+
+    d = evaluate(policy, peak=store.peaks()[0])
+    assert d.candidate is True
+    assert d.reason == ANOMALY
+
+
+def test_peak_uses_its_own_predictability(policy):
+    """전체 predictability 가 아니라 구간 값을 본다.
+
+    명세: 끼니마다 규칙성이 다르다. 아침은 일정한데 저녁이 들쭉날쭉한
+    사용자에게 저녁 기준으로 아침을 판단하면 개입을 놓친다.
+    """
+    pol, store = policy
+    store.apply(peaks_model([MORNING_PEAK], predictability=0.01))
+
+    d = evaluate(policy, peak=store.peaks()[0])
+    assert d.candidate is True                   # 전체값이 낮아도 통과
+    assert d.predictability == pytest.approx(0.54)
+
+
+def test_null_predictability_is_unreliable(policy):
+    """식사 2개 미만이면 배치가 null 을 보낸다 — 판단 근거가 없다."""
+    pol, store = policy
+    store.apply(peaks_model([{**MORNING_PEAK, "predictability": None}]))
+
+    d = evaluate(policy, peak=store.peaks()[0])
+    assert d.candidate is False
+    assert d.reason == PATTERN_UNRELIABLE
+
+
+def test_peak_factors_recorded(policy):
+    """대시보드가 어느 끼니를 보고 판단했는지 읽을 수 있어야 한다."""
+    pol, store = policy
+    store.apply(peaks_model([MORNING_PEAK]))
+
+    d = evaluate(policy, peak=store.peaks()[0])
+    assert d.factors["peak_center"] == 480
+    assert d.factors["peak_from"] == 390
+    assert d.factors["peak_to"] == 660
+
+
+def test_gates_still_apply_with_peak(policy):
+    """구간을 줘도 앞 게이트가 먼저다."""
+    pol, store = policy
+    store.apply(peaks_model([MORNING_PEAK]))
+    p = store.peaks()[0]
+
+    assert evaluate(policy, away="AWAY", peak=p).reason == NOT_HOME
+    assert evaluate(policy, occupancy="MULTI", peak=p).reason == MULTI_OCCUPANT
+    assert evaluate(policy, done=True, peak=p).reason == ALREADY_DONE
+    assert evaluate(policy, suppressed=True, peak=p).reason == SUPPRESSED
+
+
+def test_no_peak_keeps_old_path(policy):
+    """peak 를 안 주면 기존 전체 분포 경로 그대로."""
+    pol, store = policy
+    store.apply(late_model())
+
+    d = evaluate(policy)
+    assert d.candidate is True
+    assert d.reason == ANOMALY
+    assert "peak_center" not in d.factors

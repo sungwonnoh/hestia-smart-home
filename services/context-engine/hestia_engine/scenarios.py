@@ -19,7 +19,7 @@ from typing import Any, Callable
 from dataclasses import dataclass, replace
 
 from .control import Controller
-from .timeutil import KST, day_key, hhmm
+from .timeutil import KST, day_key, hhmm, minutes_since_midnight
 from datetime import datetime
 
 from .clock import Clock
@@ -28,6 +28,7 @@ from .notify import Notifier
 from .world import PresenceState, BedState, ClimateState, WorldState
 from .policy import Decision, InterventionPolicy
 from .fsm import T0Entry
+from .model import MealPeak, peak_tail
 
 log = logging.getLogger(__name__)
 
@@ -115,6 +116,15 @@ class ScenarioRunner:
         self._returned_at: float | None = None
         self._return_sent = False
 
+        # 식사
+        self._meal_fired: set[tuple[int, str]] = set()   # (peak.center, 날짜)
+
+        # 복약
+        self._med_fired: set[tuple[str, int, str]] = set()   # (med_id, 키, 날짜)
+        self._meal_ends: list[tuple[float, float]] = []      # (eat_t0, closed_at)
+        self._refill_day: str | None = None                  # 재처방을 보낸 날
+
+
     def tick(self, context: Any) -> list[tuple[str, float]]:
         """시나리오를 전부 훑는다. 조건에 안 맞으면 조용히 지나간다."""
         self._context = context
@@ -122,6 +132,9 @@ class ScenarioRunner:
         timers += self._hydration_prompt(context)
         timers += self._safety(context)
         timers += self._sleep_routine(context)
+        timers += self._meal_prompt(context)
+        timers += self._medication_prompt(context)
+        timers += self._refill_prompt(context)
         return timers
 
     def note_hydration(self, amount_ml: int) -> None:
@@ -606,7 +619,11 @@ class ScenarioRunner:
         self._track_away(context, now)
         self._track_air(now)
 
-        if self._in_pause(now):
+        if self._in_pause(
+            now,
+            str(self._hyd("pause_start", "22:00")),
+            str(self._hyd("pause_end", "06:00")),
+        ):
             # 정숙 시간에 쌓인 1회성 조건은 버린다. 6시에 몰아서 보내면
             # 사용자는 '왜 지금' 을 알 수 없다.
             self._returned_at = None
@@ -625,13 +642,252 @@ class ScenarioRunner:
 
         self._send_hydration(context, reason, now)
         return self._hydration_timers(now)
+
+
+    # ------------------------------------------------------------ MEAL_PROMPT
+
+    def _meal_prompt(self, context: Any) -> list[tuple[str, float]]:
+        """끼니가 평소보다 늦은가.
+
+        하루 전체 분포로 보면 아침이 늦어도 뒤의 점심·저녁 질량이 남아
+        '아직 이르다' 가 된다. 배치가 나눠준 구간 안에서만 본다.
+        """
+        now = self._clock.now()
+
+        if self.asleep is not None:
+            return []
+        if self._meal_in_pause(now):
+            return []
+
+        peaks = self._policy.store.peaks()
+        if peaks is None:
+            return []                        # 봉우리가 1개 이하 — 가를 수 없다
+
+        minutes = minutes_since_midnight(now)
+        peak = next((p for p in peaks if p.contains(minutes)), None)
+        if peak is None:
+            return self._meal_timers(peaks, minutes, now)   # 다음 구간 시작을 예약
+
+        today = day_key(now)
+        if (peak.center, today) in self._meal_fired:
+            return self._meal_timers(peaks, minutes, now)
+
+        d = self._policy.evaluate_meal(
+            context.away, context.occupancy, context.suppression,
+            meal_done=self._ate_in(peak, context, now),
+            peak=peak,
+        )
+        decision_id = self._emit_decision(d)
+
+        if not d.candidate:
+            return self._meal_timers(peaks, minutes, now)
+
+        self._send_meal(context, peak, decision_id, now)
+        return self._meal_timers(peaks, minutes, now)
+
+    def _meal_in_pause(self, now: float) -> bool:
+        return self._in_pause(
+            now,
+            str(self._meal_cfg("pause_start", "21:00")),
+            str(self._meal_cfg("pause_end", "05:00")),
+        )
     
+
+    # ------------------------------------------------------------ MEDICATION_PROMPT
+
+    def note_meal_closed(self, session: Any, closed_at: float) -> None:
+        """식후 약은 식사가 끝난 시각부터 잰다.
+
+        eat_t0 가 없는 묶음은 조리만 하고 안 먹은 것이다 — 끼니가 아니다.
+        """
+        if session.eat_t0 is not None:
+            self._meal_ends.append((session.eat_t0, closed_at))
+
+    def _medication_prompt(self, context: Any) -> list[tuple[str, float]]:
+        """약 드실 시간인가.
+
+        식사·수분과 달리 정숙 시간도 수면도 보지 않는다. 늦은 시각
+        처방이 있으면 그 시각에 말해야 한다.
+        """
+        now = self._clock.now()
+        today = day_key(now)
+        self._roll_medication_day(today)
+
+        meds = self._config.medications_on(today)
+        if not meds:
+            return []
+
+        timers: list[tuple[str, float]] = []
+        minutes = minutes_since_midnight(now)
+
+        for med in meds:
+            if med.schedule.type == "fixed":
+                timers += self._fixed_medication(context, med, minutes, now, today)
+            else:
+                timers += self._after_meal_medication(context, med, minutes, now, today)
+
+        return timers
+
+    def _fixed_medication(
+        self, context: Any, med: Any, minutes: int, now: float, today: str,
+    ) -> list[tuple[str, float]]:
+        """고정 시각. times 각각에 한 번."""
+        out: list[tuple[str, float]] = []
+
+        for at in med.schedule.times:
+            if (med.id, at, today) in self._med_fired:
+                continue
+            if minutes < at:
+                out.append(("medication", now + (at - minutes) * 60.0))
+                continue
+            self._send_medication(context, med, at, now, today)
+
+        return out
+
+    def _after_meal_medication(
+        self, context: Any, med: Any, minutes: int, now: float, today: str,
+    ) -> list[tuple[str, float]]:
+        """식후. 봉우리 앞에서부터 max_meal_slots 개를 쓴다.
+
+        어느 끼니인지 가리지 않는다 — 봉우리에는 이름이 없고, 순서로
+        이름을 유추하면 점심·저녁만 드시는 분에서 통째로 어긋난다.
+        """
+        peaks = self._policy.store.peaks()
+        if not peaks:
+            return []
+
+        limit = int(self._med_cfg("max_meal_slots", 3))
+        delay = med.schedule.delay_min * 60.0
+        out: list[tuple[str, float]] = []
+
+        for peak in sorted(peaks, key=lambda p: p.from_)[:limit]:
+            if (med.id, peak.center, today) in self._med_fired:
+                continue
+
+            end = self._meal_end_in(peak, today)
+            if end is None:
+                continue                 # 아직 안 드셨다. 식사 알림이 맡는다.
+
+            if now >= end + delay:
+                self._send_medication(context, med, peak.center, now, today)
+            else:
+                out.append(("medication", end + delay))
+
+        return out
+
+    def _meal_end_in(self, peak: Any, today: str) -> float | None:
+        """그 봉우리 구간에 끝난 식사의 종료 시각."""
+        for eat_t0, closed_at in self._meal_ends:
+            if day_key(eat_t0) != today:
+                continue
+            if peak.contains(minutes_since_midnight(eat_t0)):
+                return closed_at
+        return None
+
+    def _send_medication(
+        self, context: Any, med: Any, key: int, now: float, today: str,
+    ) -> None:
+        d = Decision(
+            kind=f"medication:{med.id}",
+            candidate=True,
+            reason="MEDICATION_DUE",
+            confidence=1.0,
+            factors={"med_id": med.id, "key": key},
+        )
+        notify_id = self._notifier.send(
+            scenario="MEDICATION_PROMPT",
+            title=str(self._notify_value("MEDICATION_PROMPT", "title", "복약")),
+            text=self._medication_text(med),
+            priority=str(self._notify_value("MEDICATION_PROMPT", "priority", "normal")),
+            presence=getattr(context, "presence", None),
+            suppression=getattr(context, "suppression", None),
+            # comply 를 넘기지 않는다 — ack 를 받지 않으므로 먹었는지
+            # 판정할 근거가 없다.
+            decision_id=self._emit_decision(d),
+        )
+        if notify_id is None:
+            return
+        self._med_fired.add((med.id, key, today))
+
+    def _medication_text(self, med: Any) -> str:
+        return f"{med.name} 드실 시간입니다"
+
+    def _roll_medication_day(self, today: str) -> None:
+        """날이 바뀌면 어제 기록을 버린다."""
+        self._med_fired = {
+            k for k in self._med_fired if k[2] == today
+        }
+        self._meal_ends = [
+            (a, b) for a, b in self._meal_ends if day_key(a) == today
+        ]
+
+    def _med_cfg(self, key: str, default: Any) -> Any:
+        return self._config.value("scenarios", "medication", key, default=default)
+
+
+    # ------------------------------------------------------------ REFILL_PROMPT
+
+    def _refill_prompt(self, context: Any) -> list[tuple[str, float]]:
+        """처방이 떨어지기 전에 알린다.
+
+        end_date 사흘 전부터 매일 한 번. 보낼 채널이 없으면 그날
+        다시 시도한다 — 자는 사이에 조건이 지나가면 못 받는다.
+        """
+        now = self._clock.now()
+        today = day_key(now)
+
+        if self._refill_day == today:
+            return []
+
+        hour = int(self._refill_cfg("hour", 9))
+        at = self._today_at(hour, now)
+        if now < at:
+            return [("refill", at)]
+
+        notice = int(self._refill_cfg("notice_days", 3))
+        due = [
+            m for m in self._config.medications
+            if m.refill_notice and 0 <= self._days_left(m, today) <= notice
+        ]
+        if not due:
+            self._refill_day = today        # 오늘은 볼 일이 없다
+            return []
+
+        notify_id = self._notifier.send(
+            scenario="REFILL_PROMPT",
+            title=str(self._notify_value("REFILL_PROMPT", "title", "처방 안내")),
+            text=self._refill_text(due),
+            priority=str(self._notify_value("REFILL_PROMPT", "priority", "normal")),
+            presence=getattr(context, "presence", None),
+            suppression=getattr(context, "suppression", None),
+        )
+        if notify_id is None:
+            # 기기가 다 꺼져 있다. 켜시면 그때 나간다.
+            return [("refill", now + float(self._refill_cfg("retry_sec", 1800)))]
+
+        self._refill_day = today
+        return []
+
+    @staticmethod
+    def _days_left(med: Any, today: str) -> int:
+        from datetime import date
+        return (date.fromisoformat(med.end_date) - date.fromisoformat(today)).days
+
+    def _refill_text(self, due: list) -> str:
+        names = ", ".join(m.name for m in due)
+        return f"{names} 처방이 곧 끝납니다"
+
+    def _refill_cfg(self, key: str, default: Any) -> Any:
+        return self._config.value("scenarios", "refill", key, default=default)
+
 
     # ------------------------------------------------------------ 판정 발행
 
     def _emit_decision(self, d: Decision) -> str | None:
-        """candidate 또는 reason 이 직전과 달라질 때만 발행한다."""
-        key = (d.candidate, d.reason)
+        """candidate 또는 reason 이 직전과 달라질 때만 발행한다.
+           끼니는 구간마다 따로 센다.
+        """
+        key = (d.candidate, d.reason, d.factors.get("peak_center"))
         if self._last.get(d.kind) == key:
             return None
 
@@ -889,15 +1145,15 @@ class ScenarioRunner:
 
         return [(k, t) for k, t in out if t > now]
 
-    def _in_pause(self, now: float) -> bool:
+    def _in_pause(self, now: float, start: str = "22:00", end: str = "06:00") -> bool:
         """권하지 않는 시간대."""
-        start = hhmm(str(self._hyd("pause_start", "22:00")))
-        end = hhmm(str(self._hyd("pause_end", "06:00")))
+        start_min = hhmm(start)
+        end_min = hhmm(end)
         dt = datetime.fromtimestamp(now, KST)
         minutes = dt.hour * 60 + dt.minute
-        if start <= end:
-            return start <= minutes < end
-        return minutes >= start or minutes < end
+        if start_min <= end_min:
+            return start_min <= minutes < end_min
+        return minutes >= start_min or minutes < end_min
 
     def _today_at(self, hour: int, now: float) -> float:
         dt = datetime.fromtimestamp(now, KST).replace(
@@ -913,3 +1169,106 @@ class ScenarioRunner:
 
     def _hyd(self, key: str, default: Any) -> Any:
         return self._config.value("scenarios", "hydration", key, default=default)
+
+    def _meal_cfg(self, key: str, default: Any) -> Any:
+        return self._config.value("scenarios", "meal", key, default=default)
+
+
+    def _ate_in(self, peak: MealPeak, context: Any, now: float) -> bool:
+        """이 구간에 이미 먹었는가. DayState.meals 는 eat_t0 기준."""
+        day = getattr(context, "day", None)
+        if day is not None:
+            today = day_key(now)
+            for ts in day.meals:
+                if day_key(ts) == today and peak.contains(minutes_since_midnight(ts)):
+                    return True
+
+        # 지금 먹는 중이면 묶음이 아직 안 닫혀 meals 에 없다.
+        # 그 사이에 "식사 아직이신가요" 가 나가면 안 된다.
+        activity = getattr(context, "activity", None)
+        return activity is not None and activity.state in ("COOKING", "EATING")
+
+    def _send_meal(self, context: Any, peak: MealPeak,
+                   decision_id: str | None, now: float) -> None:
+        notify_id = self._notifier.send(
+            scenario="MEAL_PROMPT",
+            title=str(self._notify_value("MEAL_PROMPT", "title", "식사")),
+            text=self._meal_text(peak, day_key(now)),
+            priority=str(self._notify_value("MEAL_PROMPT", "priority", "normal")),
+            presence=getattr(context, "presence", None),
+            suppression=getattr(context, "suppression", None),
+            comply_kind="meal",
+            comply_check="done",
+            decision_id=decision_id,
+        )
+        if notify_id is None:
+            return
+        self._meal_fired.add((peak.center, day_key(now)))
+
+    def _meal_text(self, peak: MealPeak, today: str) -> str:
+        """어느 끼니인지는 시각으로 말한다.
+
+           그 끼니에 걸린 식후 약이 있으면 함께 알린다.
+        """
+        h, m = divmod(peak.center, 60)
+        base = f"{h}시{m:02d}분쯤 드시던 식사, 아직이신가요"
+
+        meds = self._after_meal_meds_for(peak, today)
+        if meds:
+            names = ", ".join(m.name for m in meds)
+            return f"{base} 드시고 나서 {names}도 잊지 마세요"
+        return base
+
+    def _after_meal_meds_for(self, peak: MealPeak, today: str) -> list:
+        """그 봉우리에 걸린 식후 약."""
+        limit = int(self._med_cfg("max_meal_slots", 3))
+        peaks = self._policy.store.peaks() or ()
+        slots = [p.center for p in sorted(peaks, key=lambda p: p.from_)[:limit]]
+        if peak.center not in slots:
+            return []
+        return [
+            m for m in self._config.medications_on(today)
+            if m.schedule.type == "after_meal"
+        ]
+
+    def _meal_timers(self, peaks, minutes: int, now: float) -> list[tuple[str, float]]:
+        """센서가 조용해도 걸려야 한다.
+
+        구간 안이면 tail 이 임계에 닿는 시각, 구간 밖이면 다음 구간 시작.
+        """
+        at = self._meal_deadline(peaks, minutes, now)
+        return [("meal", at)] if at is not None and at > now else []
+
+    def _meal_deadline(self, peaks, minutes: int, now: float) -> float | None:
+        peak = next((p for p in peaks if p.contains(minutes)), None)
+        if peak is None:
+            return self._next_peak_start(peaks, minutes, now)
+        return self._peak_deadline(peak, minutes, now)
+
+    def _peak_deadline(self, peak: MealPeak, minutes: int, now: float) -> float | None:
+        """그 구간에서 tail 이 임계에 닿는 시각. 이미 지났으면 None."""
+        dist = self._policy.store.distribution("meal_time")
+        if dist is None:
+            return None
+
+        tail_max = float(
+            self._config.value("thresholds", "meal", "tail_max", default=0.05)
+        )
+        step = int(dist["grid_step"])
+        pos = minutes if minutes >= peak.from_ else minutes + 1440
+        end = peak.from_ + self._span(peak)
+
+        for m in range(pos + step, end + 1, step):
+            if peak_tail(dist, peak, m % 1440) < tail_max:
+                return now + (m - pos) * 60.0
+        return None
+
+    @staticmethod
+    def _span(peak: MealPeak) -> int:
+        """구간 길이. 자정을 넘으면 펴서 센다."""
+        return peak.to - peak.from_ if peak.to > peak.from_ else peak.to + 1440 - peak.from_
+
+    def _next_peak_start(self, peaks, minutes: int, now: float) -> float | None:
+        """가장 가까운 다음 구간 시작."""
+        gaps = [(p.from_ - minutes) % 1440 for p in peaks]
+        return now + min(gaps) * 60.0 if gaps else None

@@ -12,7 +12,7 @@ name = "demo"
 
 # 허용 값 목록. 여기 없는 값을 쓰면 로더가 기동을 거부한다 (오타 방지).
 areas = ["living", "kitchen", "bedroom", "bathroom", "utility", "entrance"]
-roles = ["LIVING", "SLEEP", "MEAL", "HYGIENE", "LAUNDRY", "ENTRY", "FOCUS"]
+roles = ["LIVING", "SLEEP", "MEAL", "MEAL_HEAT", "HYGIENE", "LAUNDRY", "ENTRY", "FOCUS"]
 # FOCUS 는 목록에만 둔다. 별도 작업 공간이 없어 지금은 어느 센서에도 붙이지 않는다.
 
 
@@ -104,7 +104,7 @@ note = "인덕션 — MEAL_PREP t0 의 주 신호"
 id = "vs-07"
 type = "power"
 area = "kitchen"
-roles = ["MEAL"]
+roles = ["MEAL_HEAT"]
 source = "mock"
 node = "esp32-1"
 power_profile = "microwave"

@@ -55,6 +55,12 @@ class Ctx:
             "version": 1, "sent_ts": 0, "src_id": "rpi4", "profile": name,
         })
 
+    def power(self, vid: str, watt: float, state: str):
+        return self.send(f"hestia/sensor/{vid}/state", {
+            "version": 1, "sent_ts": 0, "src_id": vid, "seq": 1,
+            "type": "power", "watt": watt, "state": state,
+        })
+
 
 @pytest.fixture
 def c(tmp_path):
@@ -378,3 +384,327 @@ def test_policy_reads_engine_store(c):
     )
     assert d.candidate is True
     assert d.reason == ANOMALY
+
+
+# ============================================================ MEAL_PROMPT
+
+
+def meal_model(peaks: list[dict], density: list[float] | None = None) -> dict:
+    """세 끼 분포. peaks 는 배치가 나눠준 구간."""
+    if density is None:
+        density = [0.0] * 96
+        for i in range(30, 34):             # 07:30~08:30 아침
+            density[i] = 0.05
+        for i in range(48, 52):             # 12:00~13:00 점심
+            density[i] = 0.05
+        for i in range(72, 76):             # 18:00~19:00 저녁
+            density[i] = 0.15
+
+    return {
+        "version": 1, "sent_ts": 0, "src_id": "rpi4",
+        "trained_at": MORNING - 86400, "sample_days": 21,
+        "distributions": {"meal_time": {
+            "grid_min": 0, "grid_step": 15,
+            "density": density, "peaks": peaks,
+        }},
+        "predictability": {"meal_time": 0.33},
+    }
+
+
+MORNING_PEAK = {"center": 480, "from": 390, "to": 660,
+                "predictability": 0.54, "days_ratio": 1.0,
+                "meals_per_day": 1.0}
+LUNCH_PEAK = {"center": 750, "from": 660, "to": 900,
+              "predictability": 0.50, "days_ratio": 1.0,
+              "meals_per_day": 1.0}
+
+
+def meal_notifies(c) -> list[dict]:
+    return [
+        p for _, t, p in c.pub.published
+        if t.startswith("hestia/notify") and p.get("scenario") == "MEAL_PROMPT"
+    ]
+
+
+def test_late_meal_notifies(c):
+    """09:40 — 아침 구간의 꼬리다."""
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK]))
+    c.presence("vs-04", True)
+    assert len(meal_notifies(c)) == 1
+
+
+def test_only_once_per_peak(c):
+    """같은 끼니에 센서가 여러 번 울려도 한 번만 보낸다."""
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK]))
+    c.presence("vs-04", True)
+    c.at(MORNING + 300).presence("vs-04", False)
+    c.at(MORNING + 600).presence("vs-04", True)
+    assert len(meal_notifies(c)) == 1
+
+
+def test_no_peaks_no_judgement(c):
+    """봉우리가 1개 이하면 배치가 필드를 생략한다 — 가를 수 없다."""
+    payload = meal_model([])
+    del payload["distributions"]["meal_time"]["peaks"]
+    c.send("hestia/model/kde", payload)
+    c.presence("vs-04", True)
+    assert meal_notifies(c) == []
+
+
+def test_outside_any_peak_is_quiet(c):
+    """끼니 사이(11:00)에는 판단하지 않는다."""
+    c.at(MORNING + 4800)                     # 11:00
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK, LUNCH_PEAK]))
+    c.presence("vs-04", True)
+    assert meal_notifies(c) == []
+
+
+def test_timer_fires_in_quiet_house(tmp_path):
+    """센서가 조용해도 끼니가 늦으면 걸려야 한다.
+
+    사용자가 가만히 있으면 recompute 가 안 돈다. 타이머가 없으면
+    아침을 통째로 거른 날이 조용히 지나간다.
+    """
+    c = Ctx(tmp_path, start=MORNING - 7200)      # 07:40 — 아직 평소 시각
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK]))
+    c.presence("vs-04", True)
+    assert meal_notifies(c) == []
+
+    c.at(MORNING)                                # 09:40 — 센서 입력 없이
+    assert len(meal_notifies(c)) == 1
+
+
+def test_meal_prompt_carries_medication(c):
+    """식사 알림이 약까지 말한다.
+
+    같은 맥락의 알림이 두 번 울리면 사용자는 둘 다 흘려듣는다.
+    """
+    c.send("hestia/registry/medications", med_registry(after_meal_med()))
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK]))
+    c.presence("vs-04", True)
+    c.at(MORNING + 900)                      # 09:55 — 꼬리
+
+    msgs = [
+        p for _, t, p in c.pub.published
+        if t.startswith("hestia/notify") and p.get("scenario") == "MEAL_PROMPT"
+    ]
+    assert len(msgs) == 1
+    assert "감기약" in msgs[0]["payload"]["text"]
+    assert med_notifies(c) == []             # 복약은 따로 안 나간다
+
+
+def test_meal_prompt_without_medication(c):
+    """식후 약이 없으면 문구에 약 얘기가 없다."""
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK]))
+    c.presence("vs-04", True)
+    c.at(MORNING + 900)
+
+    msgs = [
+        p for _, t, p in c.pub.published
+        if t.startswith("hestia/notify") and p.get("scenario") == "MEAL_PROMPT"
+    ]
+    assert "잊지 마세요" not in msgs[0]["payload"]["text"]
+
+
+# ============================================================ MEDICATION_PROMPT
+
+
+def med_registry(*meds: dict) -> dict:
+    return {
+        "version": 1, "sent_ts": 0, "src_id": "rpi5-api",
+        "medications": list(meds),
+    }
+
+
+def fixed_med(times, id="med-fix", name="혈압약", **over) -> dict:
+    base = {
+        "id": id, "name": name,
+        "schedule": {"type": "fixed", "times": times},
+        "start_date": "2026-09-01", "days": 30, "end_date": "2026-09-30",
+        "refill_notice": False,
+    }
+    return {**base, **over}
+
+
+def after_meal_med(delay=30, id="med-cold", name="감기약", **over) -> dict:
+    base = {
+        "id": id, "name": name,
+        "schedule": {"type": "after_meal", "delay_min": delay},
+        "start_date": "2026-09-01", "days": 30, "end_date": "2026-09-30",
+        "refill_notice": False,
+    }
+    return {**base, **over}
+
+
+def med_notifies(c) -> list[dict]:
+    return [
+        p for _, t, p in c.pub.published
+        if t.startswith("hestia/notify") and p.get("scenario") == "MEDICATION_PROMPT"
+    ]
+
+
+def test_fixed_time_notifies(c):
+    """09:40 — 08:00 약은 이미 지났다."""
+    c.send("hestia/registry/medications", med_registry(fixed_med(["08:00"])))
+    c.presence("vs-04", True)
+    assert len(med_notifies(c)) == 1
+
+
+def test_fixed_time_not_yet(c):
+    c.send("hestia/registry/medications", med_registry(fixed_med(["20:00"])))
+    c.presence("vs-04", True)
+    assert med_notifies(c) == []
+
+
+def test_fixed_time_fires_on_timer(c):
+    """센서가 조용해도 약 시간은 와야 한다."""
+    c.send("hestia/registry/medications", med_registry(fixed_med(["10:00"])))
+    c.presence("vs-04", True)
+    assert med_notifies(c) == []
+
+    c.at(MORNING + 1200)                     # 10:00
+    assert len(med_notifies(c)) == 1
+
+
+def test_each_time_once(c):
+    """두 번 처방이면 두 번. 같은 시각은 한 번."""
+    c.send("hestia/registry/medications", med_registry(fixed_med(["08:00", "10:00"])))
+    c.presence("vs-04", True)
+    assert len(med_notifies(c)) == 1         # 08:00 만
+
+    c.at(MORNING + 1200).presence("vs-04", True)
+    assert len(med_notifies(c)) == 2
+
+
+def test_expired_prescription_silent(c):
+    """end_date 가 지나면 멈춘다 — 재처방을 안 받으신 것이다."""
+    c.send("hestia/registry/medications", med_registry(
+        fixed_med(["08:00"], start_date="2026-08-01",
+                  days=10, end_date="2026-08-10")
+    ))
+    c.presence("vs-04", True)
+    assert med_notifies(c) == []
+
+
+def test_two_medications_both_notify(c):
+    """약마다 다른 알림이다 — 겹쳐도 중복이 아니다."""
+    c.send("hestia/registry/medications", med_registry(
+        fixed_med(["08:00"], id="med-a", name="혈압약"),
+        fixed_med(["08:00"], id="med-b", name="당뇨약"),
+    ))
+    c.presence("vs-04", True)
+    assert len(med_notifies(c)) == 2
+
+
+# ============================================================ 식후 약
+
+
+def test_after_meal_waits_for_meal(tmp_path):
+    """아직 안 드셨고 꼬리도 안 지났으면 조용하다."""
+    c = Ctx(tmp_path, start=MORNING - 9000)      # 07:10
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK]))
+    c.send("hestia/registry/medications", med_registry(after_meal_med()))
+    c.presence("vs-04", True)
+    assert med_notifies(c) == []
+
+
+def test_no_peaks_no_after_meal(c):
+    """봉우리가 없으면 붙일 자리가 없다."""
+    c.send("hestia/registry/medications", med_registry(after_meal_med()))
+    c.presence("vs-04", True)
+    assert med_notifies(c) == []
+
+
+def test_after_meal_fires_after_eating(c):
+    """실제로 드시면 끝난 시각부터 delay_min 뒤에 나간다.
+
+    식후 약의 본래 경로다 — 꼬리 알림은 안 드셨을 때의 대비일 뿐.
+    """
+    c.send("hestia/registry/medications", med_registry(after_meal_med(delay=30)))
+    c.send("hestia/model/kde", meal_model([MORNING_PEAK]))
+
+    # 조리 → 식사 → 자리 뜸 → 묶음 종료
+    c.presence("vs-04", True)
+    c.at(MORNING + 100).power("vs-06", 1180, "ON")
+    c.at(MORNING + 1000).power("vs-06", 3, "STANDBY")
+    c.at(MORNING + 1300).presence("vs-04", True, energy=12)   # EATING
+    c.at(MORNING + 1600).presence("vs-04", False)
+    c.at(MORNING + 2400)                                      # grace 경과 — 묶음 종료
+
+    assert med_notifies(c) == []                              # 아직 30분 전
+
+    c.at(MORNING + 4300)                                      # 종료 + 30분
+    msgs = med_notifies(c)
+    assert len(msgs) == 1
+    assert "감기약" in msgs[0]["payload"]["text"]
+
+
+# ============================================================ REFILL_PROMPT
+
+
+def refill_notifies(c) -> list[dict]:
+    return [
+        p for _, t, p in c.pub.published
+        if t.startswith("hestia/notify") and p.get("scenario") == "REFILL_PROMPT"
+    ]
+
+
+def test_refill_notifies_three_days_before(c):
+    """09:40 — hour=9 를 지났다. end_date 가 사흘 뒤면 알린다."""
+    c.send("hestia/registry/medications", med_registry(
+        fixed_med(["08:00"], refill_notice=True,
+                  start_date="2026-09-01", days=28, end_date="2026-09-28")
+    ))
+    c.presence("vs-04", True)
+
+    msgs = refill_notifies(c)
+    assert len(msgs) == 1
+    assert "혈압약" in msgs[0]["payload"]["text"]
+
+
+def test_refill_quiet_when_far(c):
+    c.send("hestia/registry/medications", med_registry(
+        fixed_med(["08:00"], refill_notice=True, end_date="2026-10-20")
+    ))
+    c.presence("vs-04", True)
+    assert refill_notifies(c) == []
+
+
+def test_refill_respects_flag(c):
+    """refill_notice 가 꺼진 약은 알리지 않는다."""
+    c.send("hestia/registry/medications", med_registry(
+        fixed_med(["08:00"], refill_notice=False, end_date="2026-09-28")
+    ))
+    c.presence("vs-04", True)
+    assert refill_notifies(c) == []
+
+
+def test_refill_once_a_day(c):
+    c.send("hestia/registry/medications", med_registry(
+        fixed_med(["08:00"], refill_notice=True, end_date="2026-09-28")
+    ))
+    c.presence("vs-04", True)
+    c.at(MORNING + 3600).presence("vs-04", True)
+    assert len(refill_notifies(c)) == 1
+
+
+def test_refill_waits_for_hour(tmp_path):
+    """이른 새벽에는 보내지 않는다."""
+    c = Ctx(tmp_path, start=MORNING - 10800)     # 06:40
+    c.send("hestia/registry/medications", med_registry(
+        fixed_med(["08:00"], refill_notice=True, end_date="2026-09-28")
+    ))
+    c.presence("vs-04", True)
+    assert refill_notifies(c) == []
+
+    c.at(MORNING - 2400)                         # 09:00
+    assert len(refill_notifies(c)) == 1
+
+def test_refill_silent_after_end(c):
+    """처방이 끝났으면 멈춘다 — 재처방을 안 받으신 것이다."""
+    c.send("hestia/registry/medications", med_registry(
+        fixed_med(["08:00"], refill_notice=True,
+                  start_date="2026-08-01", days=20, end_date="2026-08-20")
+    ))
+    c.presence("vs-04", True)
+    assert refill_notifies(c) == []

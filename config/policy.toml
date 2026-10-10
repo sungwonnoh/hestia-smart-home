@@ -39,7 +39,7 @@ min_hold_sec = 15
 standby_max_w = 3
 on_min_w = 500
 on_exit_w = 300
-min_hold_sec = 5
+min_hold_sec = 10
 
 
 # ============================================================ 재실 판정
@@ -151,10 +151,12 @@ hysteresis_bonus = 0.10           # 현재 상태 유지에 주는 가산점
 min_hold_sec = 60                 # 상태 최소 지속
 
 [activity.meal]
-prep_to_eating_gap_sec = 180      # 조리 종료 후 이만큼 지나면 EATING 후보
+prep_to_eating_gap_sec = 180      # 조리 종료 후 이만큼 지나야 EATING 후보
+cooking_off_window_sec = 3600     # 신설. 이보다 오래되면 그 식사와 무관(1시간)
+heated_window_sec = 900           # 신설. 데운 건 바로 먹는다(15분)
 eating_min_dwell_sec = 300        # 최소 체류
-fridge_recent_window_sec = 900    # 냉장고 접근을 "최근"으로 볼 창
-session_timeout_sec = 7200        # FSM 강제 종료 (2시간)
+fridge_recent_window_sec = 900
+session_timeout_sec = 7200
 
 [activity.sleep]
 bed_confirm_sec = 600             # 압력 패드 점유 지속
@@ -182,9 +184,10 @@ kitchen_present = 0.25
 fridge_recent = 0.10
 
 [activity.weights.EATING]
-cooking_off_recent = 0.35
-kitchen_dwell = 0.30
-low_energy = 0.15
+meal_area_dwell = 0.30
+low_energy = 0.25
+cooking_off_recent = 0.25
+heated_recent = 0.20
 fridge_recent = 0.10
 
 [activity.weights.KITCHEN_MISC]
@@ -237,7 +240,7 @@ tail_max = 0.05
 # 검증표상 std 75분이 넘어야 걸리는 값이라 사실상 전부 통과한다.
 # 명세는 predictability 를 0~1 로 정의하므로, D 트랙에서 정규화를 맞춘 뒤
 # 이 값을 다시 잡아야 한다. (그전까지 "불규칙한 사람은 개입 안 함"이 작동하지 않음)
-predictability_min = 0.05
+predictability_min = 0.20
 
 [thresholds.wake]
 tail_max = 0.05
@@ -270,7 +273,9 @@ text = "물 한 잔 드세요"
 
 [notify.MEDICATION_PROMPT]
 affinity = ["smart_fridge", "smart_tv"]
-requires_ack = true
+requires_ack = false
+fire_and_forget = true
+cooldown_sec = 0          # 약마다 시각이 다르다 — 쿨다운으로 막지 않는다
 comply_window_min = 60
 title = "복약 시간"
 text = "식사 후 약 드실 시간입니다"
@@ -298,6 +303,20 @@ comply_window_min = 0
 title = "확인"
 text = "지금 일어나계신가요?"
 
+[notify.MEAL_PROMPT]
+title = "식사"
+priority = "normal"
+cooldown_sec = 10800        # 3시간 — 끼니 간격보다 짧게
+channels = ["display", "voice"]
+comply_window_min = 60
+
+[notify.REFILL_PROMPT]
+affinity = ["smart_fridge", "smart_tv"]
+requires_ack = false
+comply_window_min = 0
+title = "처방 안내"
+text = "약이 곧 떨어집니다"
+
 
 # ============================================================ 총량 제한
 #
@@ -307,7 +326,7 @@ text = "지금 일어나계신가요?"
 max_per_day = 8
 min_interval_sec = 1800
 quiet_hours = { start = "22:00", end = "07:00" }   # 음성 채널 금지 시간대
-exempt_scenarios = ["SLEEP_ROUTINE"]               # SLEEP_ROUTINE 알림은 총량 제한에서 제외
+exempt_scenarios = ["SLEEP_ROUTINE", "MEDICATION_PROMPT"]               # SLEEP_ROUTINE 알림은 총량 제한에서 제외
 
 
 # ============================================================ 관측 창
@@ -403,6 +422,19 @@ return_delay_sec = 600          # 귀가 10분 뒤
 # 중단
 pause_start = "22:00"
 pause_end = "06:00"
+
+
+[scenarios.meal]
+pause_start = "21:00"
+pause_end = "05:00"
+
+[scenarios.medication]
+max_meal_slots = 3
+
+[scenarios.refill]
+notice_days = 3
+hour = 9
+retry_sec = 1800
 
 
 # ============================================================ 안전
