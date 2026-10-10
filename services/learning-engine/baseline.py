@@ -30,6 +30,13 @@ DATA_PATH = Path(
 # t0 epoch를 자정 기준 분으로 바꿀 때 사용한다.
 KST = timezone(timedelta(hours=9))
 
+# meal_time 을 학습할 시각.
+#   t0      식사 묶음 시작 (조리 또는 먹기 중 먼저 — 인덕션 ON / 주방 진입)
+#   eat_t0  묶음 안 첫 EATING 판정 시각
+# 어느 쪽으로 학습할지는 실데이터로 비교해 정한다. 그전까지 기존과 같은 t0.
+MEAL_SOURCES = ("t0", "eat_t0")
+MEAL_SOURCE = "t0"
+
 # t0 JSONL의 type → KDE distribution 이름
 # 현재 hestia/log/t0 명세의 type은 meal / wake / hydration 뿐이다.
 # sleep t0는 팀 합의 전이므로 매핑하지 않는다 (sleep_time은 Aruba proxy로 학습).
@@ -60,6 +67,20 @@ GRID_SIZE = 24 * 60 // GRID_STEP  # 96칸
 # 급수만 t0 로 남기므로 실제 hydration_lag 는 120분을 넘지 않는다.
 HYDRATION_GRID_STEP = 5
 HYDRATION_GRID_MAX_MIN = 120
+
+# meal_time 끼니(peaks) 거르기 — Context Engine MEAL 설계 합의값 (임시, 실데이터로 재검토).
+#
+# days_ratio < MEAL_MIN_DAYS_RATIO 이면 보내지 않는다.
+#   과반의 날에 먹어야 이 사람의 식사 습관으로 본다.
+#   구간 tail 은 구간 안에서 다시 정규화돼 빈도를 지운다 (주 3회 먹는 아침도 매일 먹는 아침과
+#   같은 tail). days_ratio p 인 끼니에 거름 알림을 하면 정상인데도 1-p 의 날에 울린다.
+#
+# meals_per_day > MEAL_MAX_MEALS_PER_DAY 이면 보내지 않는다.
+#   두 끼가 골짜기 없이 이어져 한 봉우리가 된 경우다. 보내면 앞 끼니를 먹은 것이
+#   뒤 끼니 구간의 "이미 먹음"이 되어 뒤 끼니 거름을 잡지 못한다.
+#   days_ratio 는 1.0 에서 멈춰 이걸 구별하지 못한다.
+MEAL_MIN_DAYS_RATIO = 0.5
+MEAL_MAX_MEALS_PER_DAY = 1.5
 
 # gaussian_kde 가 계산 가능한 최소 표본 수 (수학적 하한).
 # 학습 신뢰도를 위한 최소 일수는 실험 없이 정하지 않는다.
@@ -207,6 +228,8 @@ def parse_t0_record(obj) -> T0Sample:
 
     sleep_start / sleep_end 는 duration_sec 이 없거나 null 이어도 된다 (0 으로 본다).
     수면 길이는 짝지은 sleep_end - sleep_start 로 계산하므로 이 값을 쓰지 않는다.
+
+    eat_t0 (meal) 는 선택 필드다. 있으면 null 또는 t0 이상의 epoch seconds 여야 한다.
     """
 
     if not isinstance(obj, dict):
@@ -251,6 +274,12 @@ def parse_t0_record(obj) -> T0Sample:
         raise ValueError(
             "duration_sec는 0 이상의 숫자여야 합니다."
         )
+
+    if "eat_t0" in obj and obj["eat_t0"] is not None:
+        if not _is_number(obj["eat_t0"]) or obj["eat_t0"] < obj["t0"]:
+            raise ValueError(
+                "eat_t0는 null 또는 t0 이상의 epoch seconds여야 합니다."
+            )
 
     return T0Sample(
         date=obj["date"],
@@ -409,11 +438,63 @@ def t0_to_kde_samples(samples: list[T0Sample]) -> list[KdeSample]:
     return out
 
 
-def t0_records_to_kde_samples(records: list[dict]) -> list[KdeSample]:
+def prepare_meal_records(
+    records: list[dict],
+    meal_source: str = MEAL_SOURCE,
+) -> list[dict]:
+    """
+    meal 레코드를 meal_time 학습 기준에 맞춘다. 다른 type 은 그대로 둔다.
+
+      - eat_t0 = null   조리만 하고 먹지 않은 묶음 → 식사가 아니므로 뺀다
+      - eat_t0 필드 없음 Context Engine 이 eat_t0 를 남기기 전 로그 → 판단할 수 없어 t0 로 학습
+      - meal_source = eat_t0 이면 eat_t0 로 학습한다. eat_t0 가 없는 레코드는 뺀다
+        (t0 와 의미가 달라 섞지 않는다). date 도 eat_t0 의 KST 날짜로 바꾼다
+    """
+
+    if meal_source not in MEAL_SOURCES:
+        raise ValueError(f"meal_source는 {MEAL_SOURCES} 중 하나: {meal_source!r}")
+
+    out = []
+    not_eaten = no_eat_t0 = 0
+
+    for r in records:
+        if r.get("type") != "meal":
+            out.append(r)
+            continue
+
+        if "eat_t0" in r and r["eat_t0"] is None:
+            not_eaten += 1
+            continue
+
+        if meal_source == "eat_t0":
+            if "eat_t0" not in r:
+                no_eat_t0 += 1
+                continue
+            r = {
+                **r,
+                "t0": r["eat_t0"],
+                "date": datetime.fromtimestamp(r["eat_t0"], KST).date().isoformat(),
+            }
+
+        out.append(r)
+
+    if not_eaten:
+        log.info("먹지 않은 식사 묶음(eat_t0 = null) %d건 제외", not_eaten)
+    if no_eat_t0:
+        log.info("eat_t0 가 없는 meal %d건 제외 (meal_source = eat_t0)", no_eat_t0)
+
+    return out
+
+
+def t0_records_to_kde_samples(
+    records: list[dict],
+    meal_source: str = MEAL_SOURCE,
+) -> list[KdeSample]:
     """
     t0 로그 전체 → KdeSample.
 
         meal / hydration          t0 adapter (t0_to_kde_samples)
+                                  meal 은 prepare_meal_records 로 먼저 거른다 (eat_t0 = null 제외 등)
         sleep_start / sleep_end   짝지어 수면 → 밤잠 / 낮잠 구분 → 밤잠만 sleep_time / wake_time
 
     wake_time 은 한 곳에서만 얻는다 (같은 기상을 두 번 학습하지 않도록).
@@ -422,7 +503,7 @@ def t0_records_to_kde_samples(records: list[dict]) -> list[KdeSample]:
       - 없으면 wake 레코드를 쓴다 (이전과 같음)
     """
 
-    samples = t0_to_kde_samples([parse_t0_record(r) for r in records])
+    samples = t0_to_kde_samples([parse_t0_record(r) for r in prepare_meal_records(records, meal_source)])
     sleep_events = [r for r in records if r.get("type") in SLEEP_EVENT_TYPES]
 
     if not sleep_events:
@@ -570,19 +651,31 @@ def meal_peaks(
     values: np.ndarray,
     density: list[float],
     weights: np.ndarray | None = None,
-) -> list[dict] | None:
+    dates: list[str] | None = None,
+    min_days_ratio: float | None = MEAL_MIN_DAYS_RATIO,
+    max_meals_per_day: float | None = MEAL_MAX_MEALS_PER_DAY,
+) -> tuple[list[dict] | None, list[dict]]:
     """
-    meal_time 의 끼니 구간과 끼니별 predictability (Context Engine 합의).
+    meal_time 의 끼니 구간과 끼니별 통계 (Context Engine 합의).
 
         {"center": 봉우리 칸 시작 분, "from": 구간 시작 분, "to": 구간 끝 분(미포함),
-         "predictability": 그 구간 식사만으로 그린 KDE 의 predictability | null}
+         "predictability": 그 구간 식사만으로 그린 KDE 의 predictability | null,
+         "days_ratio": 그 구간에 식사가 있었던 날 / sample_days,
+         "meals_per_day": 그 구간 식사 수 / sample_days}
 
     - 구간은 발행하는 density 에서 찾는다 (Context Engine 이 같은 density 로 구간 tail 을 계산)
     - 끼니별 predictability 는 구간에 속한 식사만으로 KDE(96칸)를 다시 그려 계산한다
       (전체 meal_time 은 다봉이라 규칙적인 사람도 0.07~0.11 로 낮게 나온다)
     - 그 구간 식사가 2개 미만이거나 KDE 를 그릴 수 없으면 predictability = null
     - from > to 면 자정을 넘는 구간이다
-    - 봉우리가 1개 이하면 None (payload 에 peaks 를 넣지 않는다)
+    - days_ratio < min_days_ratio 또는 meals_per_day > max_meals_per_day 인 끼니는 보내지 않는다.
+      그 시간대는 이웃 끼니에 합치지 않고 비워 둔다 (None 이면 그 기준으로 거르지 않음).
+      days_ratio / meals_per_day 는 가중치 없이 실제 횟수로 센다
+    - sample_days 는 식사 기록이 있는 날 수다. 하루 종일 식사가 없던 날은 데이터 없는 날과 구별되지 않아 빠진다
+    - meals_per_day > 1 이면 그 구간에 끼니가 여럿 있거나 한 끼가 여러 기록으로 쪼개졌다는 뜻이다
+
+    반환: (peaks, 걸러진 끼니 + 이유). 봉우리가 1개 이하면 peaks = None (payload 에 넣지 않는다).
+    봉우리가 2개 이상이었으면 거른 뒤 1개면 1개, 0개면 [] 다.
     """
 
     from meal_slots import assign_slots, find_peaks, slot_ranges
@@ -590,14 +683,17 @@ def meal_peaks(
     peaks = find_peaks(density)
 
     if len(peaks) <= 1:
-        return None
+        return None, []
 
     step = TIME_OF_DAY_GRID.grid_step
     values = np.asarray(values, dtype=float)
     slot = assign_slots(values, density, peaks, step)
     w = None if weights is None else np.asarray(weights, dtype=float)
+    dates = np.asarray(dates if dates is not None else [""] * len(values))
+    days = len(set(dates.tolist())) or 1
 
     out = []
+    dropped = []
 
     for k, (peak, (start, end)) in enumerate(zip(peaks, slot_ranges(density, peaks))):
         member = slot == k
@@ -612,14 +708,28 @@ def meal_peaks(
         except InsufficientSamples:
             pred = None
 
-        out.append({
+        entry = {
             "center": int(peak * step),
             "from": int(start * step),
             "to": int(end * step),
             "predictability": pred,
-        })
+            "days_ratio": len(set(dates[member].tolist())) / days,
+            "meals_per_day": int(member.sum()) / days,
+        }
 
-    return out
+        reasons = []
+        if min_days_ratio is not None and entry["days_ratio"] < min_days_ratio:
+            reasons.append(f"days_ratio < {min_days_ratio}")
+        if max_meals_per_day is not None and entry["meals_per_day"] > max_meals_per_day:
+            reasons.append(f"meals_per_day > {max_meals_per_day}")
+
+        if reasons:
+            dropped.append({**entry, "reason": reasons})
+            continue
+
+        out.append(entry)
+
+    return out, dropped
 
 
 def calculate_entropy(
@@ -674,6 +784,8 @@ def build_model(
     hydration_max_min: float = HYDRATION_GRID_MAX_MIN,
     sample_weighting: SampleWeighting | None = None,
     cold_start: ColdStart | None = None,
+    meal_min_days_ratio: float | None = MEAL_MIN_DAYS_RATIO,
+    meal_max_meals_per_day: float | None = MEAL_MAX_MEALS_PER_DAY,
 ) -> dict:
     """
     MQTT payload에 들어갈 KDE 모델 부분을 생성한다.
@@ -756,9 +868,18 @@ def build_model(
         }
 
         if name == "meal_time":
-            peaks = meal_peaks(kde_samples.values(items), density, weights)
+            peaks, dropped = meal_peaks(
+                kde_samples.values(items),
+                density,
+                weights,
+                dates=[s.date for s in items],
+                min_days_ratio=meal_min_days_ratio,
+                max_meals_per_day=meal_max_meals_per_day,
+            )
             if peaks is not None:
                 distributions[name]["peaks"] = peaks
+            if dropped:
+                info["meal_peaks_dropped"] = dropped
 
         predictability[name] = calculate_predictability(density)
         meta[name] = info
@@ -795,6 +916,12 @@ def add_input_arguments(parser: argparse.ArgumentParser) -> None:
         help="Aruba 원본(aruba.txt) — meal_time / sleep_time·wake_time(proxy)",
     )
     parser.add_argument(
+        "--meal-source",
+        choices=MEAL_SOURCES,
+        default=MEAL_SOURCE,
+        help="meal_time 학습 시각: t0(식사 묶음 시작) / eat_t0(먹기 시작). 기본 t0",
+    )
+    parser.add_argument(
         "--synthetic-hydration",
         action="store_true",
         help="검증용 synthetic hydration_lag 추가",
@@ -814,12 +941,12 @@ def samples_from_args(args) -> list[KdeSample] | None:
     collected: list[KdeSample] = []
 
     if args.t0_jsonl:
-        collected += t0_records_to_kde_samples(load_t0_records(args.t0_jsonl))
+        collected += t0_records_to_kde_samples(load_t0_records(args.t0_jsonl), args.meal_source)
 
     if args.aruba_raw:
         from aruba import extract_samples
 
-        for series in extract_samples(args.aruba_raw).values():
+        for series in extract_samples(args.aruba_raw, meal_source=args.meal_source).values():
             collected += series
 
 

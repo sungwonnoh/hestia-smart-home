@@ -228,3 +228,87 @@ def test_duration_still_required_for_other_types():
     record.pop("duration_sec")
     with pytest.raises(ValueError, match="duration_sec"):
         parse_t0_record(record)
+
+
+# ============================================================ meal eat_t0
+
+
+def meal(day, minute, eat_after=None, **extra):
+    """eat_after: None 이면 eat_t0 필드 없음, "null" 이면 null, 숫자면 t0 + 분"""
+    r = t0_record(day, "meal", minute, duration_sec=1800, **extra)
+    if eat_after == "null":
+        r["eat_t0"] = None
+    elif eat_after is not None:
+        r["eat_t0"] = r["t0"] + eat_after * 60
+    return r
+
+
+@pytest.mark.parametrize("eat_t0, ok", [(None, True), ("same", True), ("later", True), ("earlier", False), ("str", False), (True, False)])
+def test_eat_t0_validation(eat_t0, ok):
+    r = meal(0, 9 * 60)
+    r["eat_t0"] = {"same": r["t0"], "later": r["t0"] + 60, "earlier": r["t0"] - 60, "str": "x"}.get(eat_t0, eat_t0)
+    if ok:
+        parse_t0_record(r)
+    else:
+        with pytest.raises(ValueError, match="eat_t0"):
+            parse_t0_record(r)
+
+
+def test_not_eaten_meals_are_excluded():
+    """eat_t0 = null (조리만 하고 안 먹음) 은 식사가 아니다."""
+    from baseline import t0_records_to_kde_samples
+    records = [meal(0, 9 * 60, 25), meal(1, 9 * 60, "null"), meal(2, 9 * 60)]
+    samples = t0_records_to_kde_samples(records)
+    assert len([s for s in samples if s.distribution == "meal_time"]) == 2     # null 만 빠짐
+
+
+def test_old_logs_without_eat_t0_still_learn_from_t0():
+    from baseline import t0_records_to_kde_samples
+    samples = t0_records_to_kde_samples([meal(d, 9 * 60) for d in range(3)])
+    assert [round(s.value) for s in samples] == [540, 540, 540]
+
+
+def test_meal_source_eat_t0():
+    """eat_t0 로 학습 — 값과 날짜 모두 eat_t0 기준, eat_t0 가 없거나 null 이면 뺀다."""
+    from baseline import t0_records_to_kde_samples
+    records = [
+        meal(0, 9 * 60, 25),
+        meal(1, 23 * 60 + 50, 20),          # 먹기는 다음 날 00:10
+        meal(2, 9 * 60),                    # 필드 없음
+        meal(3, 9 * 60, "null"),
+    ]
+    samples = t0_records_to_kde_samples(records, meal_source="eat_t0")
+    assert [(s.date, round(s.value)) for s in samples] == [("2026-09-01", 565), ("2026-09-03", 10)]
+
+
+def test_meal_source_t0_keeps_t0_even_if_eat_t0_present():
+    from baseline import t0_records_to_kde_samples
+    samples = t0_records_to_kde_samples([meal(0, 9 * 60, 25)])
+    assert [round(s.value) for s in samples] == [540]
+
+
+def test_unknown_meal_source():
+    from baseline import t0_records_to_kde_samples
+    with pytest.raises(ValueError, match="meal_source"):
+        t0_records_to_kde_samples([meal(0, 540)], meal_source="eaten")
+
+
+def test_eat_t0_does_not_touch_other_types():
+    from baseline import t0_records_to_kde_samples
+    records = sleep_events(4) + [meal(d, 8 * 60, 15) for d in range(5)]
+    a = t0_records_to_kde_samples(records, meal_source="t0")
+    b = t0_records_to_kde_samples(records, meal_source="eat_t0")
+    pick = lambda xs: [(s.distribution, s.value) for s in xs if s.distribution != "meal_time"]
+    assert pick(a) == pick(b)
+
+
+def test_cli_meal_source(tmp_path):
+    import argparse
+    from baseline import add_input_arguments, samples_from_args
+    path = tmp_path / "t0.jsonl"
+    path.write_text("\n".join(json.dumps(meal(d, 9 * 60, 30)) for d in range(3)) + "\n", encoding="utf-8")
+    parser = argparse.ArgumentParser()
+    add_input_arguments(parser)
+    t0 = samples_from_args(parser.parse_args(["--t0-jsonl", str(path)]))
+    eat = samples_from_args(parser.parse_args(["--t0-jsonl", str(path), "--meal-source", "eat_t0"]))
+    assert {round(s.value) for s in t0} == {540} and {round(s.value) for s in eat} == {570}

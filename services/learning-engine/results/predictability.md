@@ -53,7 +53,7 @@ wake_time / sleep_time 은 Aruba `Sleeping` 라벨로 만든 proxy 다 (HESTIA t
 | 데이터 | n | 실제 std (분) | entropy (nats) | predictability |
 |---|---:|---:|---:|---:|
 | meal_time — breakfast (05~11시 첫 식사) | 212 | 75.2 | 3.057 | 0.330 |
-| meal_time — 전체 Meal_Preparation | 1606 | 280.1 | 4.245 | 0.070 |
+| meal_time — 식사 묶음 전체 (조리+먹기, Context Engine 규칙) | 1020 | 279.4 | 4.271 | 0.064 |
 | wake_time (proxy) | 219 | 78.2 | 3.110 | 0.319 |
 | sleep_time (proxy) | 220 | 69.9 | 2.982 | 0.347 |
 

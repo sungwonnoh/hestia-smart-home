@@ -94,6 +94,7 @@ def test_all_sources_feed_the_same_fit(tmp_path):
             f"2010-11-{day:02d} 22:{day * 5:02d}:00.0\tM003\tON\tSleeping\tbegin",
             f"2010-11-{day + 1:02d} 06:{day * 5:02d}:00.0\tM003\tOFF\tSleeping\tend",
             f"2010-11-{day + 1:02d} 07:{day * 5:02d}:00.0\tM018\tON\tMeal_Preparation\tbegin",
+            f"2010-11-{day + 1:02d} 07:{day * 5 + 10:02d}:00.0\tM018\tOFF\tMeal_Preparation\tend",
         ]
     aruba_txt.write_text("\n".join(lines + ["2010-11-10 00:00:00.0\tT002\t21"]) + "\n", encoding="utf-8")
     from_aruba = [s for series in extract_samples(aruba_txt).values() for s in series]

@@ -138,7 +138,8 @@ def main(argv=None) -> int:
 
         for p in d["peaks"] or []:
             pred = "null" if p["predictability"] is None else f"{p['predictability']:.3f}"
-            print(f"    끼니 center={p['center']} [{p['from']}, {p['to']}) predictability={pred}")
+            print(f"    끼니 center={p['center']} [{p['from']}, {p['to']}) predictability={pred} "
+                  f"days_ratio={p['days_ratio']:.2f} meals_per_day={p['meals_per_day']:.2f}")
 
     if summary["missing"]:
         print(f"  없음: {', '.join(summary['missing'])}")

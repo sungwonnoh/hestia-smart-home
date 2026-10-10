@@ -203,7 +203,7 @@ def aruba_rows(
     series = extract_samples(raw_path)
 
     for name, label in (
-        ("meal_time", "meal_time — 전체 Meal_Preparation"),
+        ("meal_time", "meal_time — 식사 묶음 전체 (조리+먹기, Context Engine 규칙)"),
         ("wake_time", "wake_time (proxy)"),
         ("sleep_time", "sleep_time (proxy)"),
     ):

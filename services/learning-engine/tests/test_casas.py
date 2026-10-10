@@ -196,3 +196,39 @@ def test_real_predictability_range(real):
         r = casas.person_summary(spec, s)
         assert 0.25 < r["sleep_time"] < 0.6, key
         assert 0.25 < r["wake_time"] < 0.6, key
+
+
+def test_aruba_export_includes_meals(tmp_path):
+    """Aruba 는 식사도 Context Engine 형식으로 내보낸다. 먹기 시각을 모르면 eat_t0 필드 없음."""
+    from baseline import load_t0_records, t0_records_to_kde_samples
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    write(raw, "aruba.txt", [
+        lab("2010-11-04 23:00:00.0", "Sleeping", "begin"),
+        lab("2010-11-05 06:30:00.0", "Sleeping", "end"),
+        lab("2010-11-05 07:00:00.0", "Meal_Preparation", "begin"),
+        lab("2010-11-05 07:15:00.0", "Meal_Preparation", "end"),
+        lab("2010-11-05 07:20:00.0", "Eating", "begin"),
+        lab("2010-11-05 07:40:00.0", "Eating", "end"),
+        lab("2010-11-05 18:00:00.0", "Meal_Preparation", "begin"),
+        lab("2010-11-05 18:30:00.0", "Meal_Preparation", "end"),
+    ])
+    [path] = export_jsonl(tmp_path / "out", raw)
+    records = load_t0_records(path)
+    meals = [r for r in records if r["type"] == "meal"]
+    assert len(meals) == 2
+    assert meals[0]["eat_t0"] - meals[0]["t0"] == 20 * 60 and "eat_t0" not in meals[1]
+
+    t0 = [s for s in t0_records_to_kde_samples(records) if s.distribution == "meal_time"]
+    eat = [s for s in t0_records_to_kde_samples(records, "eat_t0") if s.distribution == "meal_time"]
+    assert [hhmm(s) for s in t0] == ["07:00", "18:00"] and [hhmm(s) for s in eat] == ["07:20"]
+
+
+@needs_raw
+def test_real_aruba_meal_sessions():
+    from aruba import extract_meal, meal_sessions
+    log = read_events(RAW_DIR / "aruba.txt", {"Meal_Preparation", "Eating"})
+    sessions = meal_sessions(log.events)
+    assert len(sessions) == 1020
+    assert sum(m.eat_start is not None for m in sessions) == 210
+    assert len(extract_meal(log)) == 1020 and len(extract_meal(log, "eat_t0")) == 210

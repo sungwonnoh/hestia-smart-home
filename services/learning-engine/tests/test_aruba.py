@@ -10,6 +10,9 @@ from aruba import (
     clock_minutes,
     count_labels,
     extract_meal,
+    meal_label_begins,
+    meal_records,
+    meal_sessions,
     extract_samples,
     extract_sleep,
     pair_segments,
@@ -285,25 +288,114 @@ def test_sleep_samples_are_marked_as_proxy(tmp_path):
 # ============================================================ 식사
 
 
-def test_extract_meal_uses_begin_only(tmp_path):
+def test_meal_label_begins_uses_begin_only(tmp_path):
+    """이전 방식 — 라벨 begin 전부 (회귀 비교용)."""
     path = write(
         tmp_path,
         label("2010-11-04 08:11:09.966157", "Meal_Preparation", "begin"),
         label("2010-11-04 08:30:00.000000", "Meal_Preparation", "end"),
         label("2010-11-04 18:00:00", "Meal_Preparation", "begin"),
     )
-    meals = extract_meal(read_events(path))
+    meals = meal_label_begins(read_events(path))
     assert [(m.date, hhmm(m)) for m in meals] == [("2010-11-04", "08:11"), ("2010-11-04", "18:00")]
     assert meals[0].value == pytest.approx(8 * 60 + 11 + 9.966157 / 60)
     assert not any(m.proxy for m in meals)
     assert {(m.source, m.prompted) for m in meals} == {("aruba", False)}
 
 
+def prep(begin, end):
+    return [label(begin, "Meal_Preparation", "begin"), label(end, "Meal_Preparation", "end")]
+
+
+def eat(begin, end):
+    return [label(begin, "Eating", "begin"), label(end, "Eating", "end")]
+
+
+def sessions_of(tmp_path, *lines):
+    return meal_sessions(read_events(write(tmp_path, *lines)).events)
+
+
+def test_cook_then_eat_is_one_meal(tmp_path):
+    """조리 → 10분 안에 먹기 = 한 끼. t0 = 조리 시작, eat_t0 = 먹기 시작."""
+    [m] = sessions_of(
+        tmp_path,
+        *prep("2010-11-04 09:20:00.0", "2010-11-04 09:35:00.0"),
+        *eat("2010-11-04 09:40:00.0", "2010-11-04 10:00:00.0"),
+    )
+    assert (m.start.strftime("%H:%M"), m.eat_start.strftime("%H:%M"), m.end.strftime("%H:%M")) == ("09:20", "09:40", "10:00")
+
+
+def test_fragmented_labels_are_one_meal(tmp_path):
+    """CASAS 는 한 끼에 조리 라벨이 여러 번 찍힌다 — 10분 안에 이어지면 한 끼."""
+    sessions = sessions_of(
+        tmp_path,
+        *prep("2010-11-04 18:00:00.0", "2010-11-04 18:02:00.0"),
+        *prep("2010-11-04 18:05:00.0", "2010-11-04 18:07:00.0"),
+        *prep("2010-11-04 18:15:00.0", "2010-11-04 18:20:00.0"),
+    )
+    assert len(sessions) == 1 and sessions[0].eat_start is None
+
+
+def test_eat_only_meal(tmp_path):
+    """시리얼처럼 조리 없이 먹은 끼니도 식사다 — t0 == eat_t0."""
+    [m] = sessions_of(tmp_path, *eat("2010-11-04 08:10:00.0", "2010-11-04 08:25:00.0"))
+    assert m.start == m.eat_start
+
+
+def test_separate_meals_and_short_ones(tmp_path):
+    sessions = sessions_of(
+        tmp_path,
+        *prep("2010-11-04 08:00:00.0", "2010-11-04 08:10:00.0"),
+        *prep("2010-11-04 08:30:00.0", "2010-11-04 08:31:00.0"),     # 20분 뒤 1분 — 새 묶음, 2분 미만이라 버림
+        *prep("2010-11-04 12:00:00.0", "2010-11-04 12:20:00.0"),
+    )
+    assert [m.start.strftime("%H:%M") for m in sessions] == ["08:00", "12:00"]
+
+
+def test_session_timeout_starts_new_meal(tmp_path):
+    lines = []
+    for h in range(9, 13):                                           # 9~12시 5분마다 이어지는 조리
+        for m in range(0, 60, 5):
+            lines += prep(f"2010-11-04 {h:02d}:{m:02d}:00.0", f"2010-11-04 {h:02d}:{m:02d}:30.0")
+    sessions = sessions_of(tmp_path, *lines)
+    assert len(sessions) >= 2
+    assert all((s.end - s.start).total_seconds() <= 7200 for s in sessions)
+
+
+def test_extract_meal_sources(tmp_path):
+    path = write(
+        tmp_path,
+        *prep("2010-11-04 09:20:00.0", "2010-11-04 09:35:00.0"),
+        *eat("2010-11-04 09:40:00.0", "2010-11-04 10:00:00.0"),
+        *prep("2010-11-04 18:00:00.0", "2010-11-04 18:30:00.0"),     # 먹기 라벨 없음 → eat_t0 모름
+    )
+    log = read_events(path)
+    assert [hhmm(m) for m in extract_meal(log)] == ["09:20", "18:00"]
+    assert [hhmm(m) for m in extract_meal(log, "eat_t0")] == ["09:40"]
+    with pytest.raises(ValueError):
+        extract_meal(log, "eaten")
+
+
+def test_meal_records_omit_unknown_eat_t0(tmp_path):
+    """먹기 시각을 모르는 묶음은 eat_t0 필드를 넣지 않는다 (null = 안 먹음과 구별)."""
+    sessions = sessions_of(
+        tmp_path,
+        *prep("2010-11-04 09:20:00.0", "2010-11-04 09:35:00.0"),
+        *eat("2010-11-04 09:40:00.0", "2010-11-04 10:00:00.0"),
+        *prep("2010-11-04 18:00:00.0", "2010-11-04 18:30:00.0"),
+    )
+    records = meal_records(sessions, "aruba")
+    assert records[0]["eat_t0"] - records[0]["t0"] == 20 * 60
+    assert records[0]["duration_sec"] == 40 * 60
+    assert "eat_t0" not in records[1]
+    assert {r["type"] for r in records} == {"meal"}
+
+
 def test_extract_samples_has_three_series(tmp_path):
     path = write(
         tmp_path,
         *sleep_lines("2010-11-04 23:00:00.0", "2010-11-05 06:00:00.0"),
-        label("2010-11-05 07:00:00.0", "Meal_Preparation", "begin"),
+        *prep("2010-11-05 07:00:00.0", "2010-11-05 07:20:00.0"),
     )
     samples = extract_samples(path)
     assert {k: len(v) for k, v in samples.items()} == {"meal_time": 1, "sleep_time": 1, "wake_time": 1}
@@ -336,7 +428,7 @@ def test_real_meal_matches_existing_parser(raw_log):
     with open(PROCESSED / "meal_preparation.csv", encoding="utf-8") as f:
         expected = sorted((r["date"], clock_minutes(read_csv_ts(r))) for r in csv.DictReader(f))
 
-    actual = sorted((m.date, m.value) for m in extract_meal(raw_log))
+    actual = sorted((m.date, m.value) for m in meal_label_begins(raw_log))
     assert [d for d, _ in actual] == [d for d, _ in expected]
     assert [v for _, v in actual] == pytest.approx([v for _, v in expected], abs=1e-9)
 
@@ -348,7 +440,7 @@ def test_real_meal_reproduces_breakfast(raw_log):
         expected = sorted((r["date"], clock_minutes(read_csv_ts(r))) for r in csv.DictReader(f))
 
     first = {}
-    for m in sorted(extract_meal(raw_log), key=lambda m: (m.date, m.value)):
+    for m in sorted(meal_label_begins(raw_log), key=lambda m: (m.date, m.value)):
         if 5 <= hour(m) < 11:
             first.setdefault(m.date, m.value)
     actual = sorted(first.items())
