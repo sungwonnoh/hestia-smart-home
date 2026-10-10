@@ -566,6 +566,62 @@ def fit_distribution(
     return grid, density
 
 
+def meal_peaks(
+    values: np.ndarray,
+    density: list[float],
+    weights: np.ndarray | None = None,
+) -> list[dict] | None:
+    """
+    meal_time 의 끼니 구간과 끼니별 predictability (Context Engine 합의).
+
+        {"center": 봉우리 칸 시작 분, "from": 구간 시작 분, "to": 구간 끝 분(미포함),
+         "predictability": 그 구간 식사만으로 그린 KDE 의 predictability | null}
+
+    - 구간은 발행하는 density 에서 찾는다 (Context Engine 이 같은 density 로 구간 tail 을 계산)
+    - 끼니별 predictability 는 구간에 속한 식사만으로 KDE(96칸)를 다시 그려 계산한다
+      (전체 meal_time 은 다봉이라 규칙적인 사람도 0.07~0.11 로 낮게 나온다)
+    - 그 구간 식사가 2개 미만이거나 KDE 를 그릴 수 없으면 predictability = null
+    - from > to 면 자정을 넘는 구간이다
+    - 봉우리가 1개 이하면 None (payload 에 peaks 를 넣지 않는다)
+    """
+
+    from meal_slots import assign_slots, find_peaks, slot_ranges
+
+    peaks = find_peaks(density)
+
+    if len(peaks) <= 1:
+        return None
+
+    step = TIME_OF_DAY_GRID.grid_step
+    values = np.asarray(values, dtype=float)
+    slot = assign_slots(values, density, peaks, step)
+    w = None if weights is None else np.asarray(weights, dtype=float)
+
+    out = []
+
+    for k, (peak, (start, end)) in enumerate(zip(peaks, slot_ranges(density, peaks))):
+        member = slot == k
+
+        try:
+            _, part = fit_distribution(
+                "meal_time",
+                values[member],
+                weights=None if w is None else w[member],
+            )
+            pred = calculate_predictability(part)
+        except InsufficientSamples:
+            pred = None
+
+        out.append({
+            "center": int(peak * step),
+            "from": int(start * step),
+            "to": int(end * step),
+            "predictability": pred,
+        })
+
+    return out
+
+
 def calculate_entropy(
     density: list[float],
 ) -> float:
@@ -698,6 +754,12 @@ def build_model(
             **grid.to_payload(),
             "density": density,
         }
+
+        if name == "meal_time":
+            peaks = meal_peaks(kde_samples.values(items), density, weights)
+            if peaks is not None:
+                distributions[name]["peaks"] = peaks
+
         predictability[name] = calculate_predictability(density)
         meta[name] = info
         used += items

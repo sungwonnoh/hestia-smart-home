@@ -54,6 +54,7 @@ def check_payload(raw: bytes | str, required=DEFAULT_REQUIRED) -> dict:
                 "grid_step": d["grid_step"],
                 "sum": sum(d["density"]),
                 "predictability": payload["predictability"][name],
+                "peaks": d.get("peaks"),
             }
             for name, d in payload["distributions"].items()
         },
@@ -134,6 +135,10 @@ def main(argv=None) -> int:
     for name, d in summary["distributions"].items():
         print(f"  {name:<14} {d['bins']:>3}칸 step={d['grid_step']} "
               f"sum={d['sum']:.6f} predictability={d['predictability']:.3f}")
+
+        for p in d["peaks"] or []:
+            pred = "null" if p["predictability"] is None else f"{p['predictability']:.3f}"
+            print(f"    끼니 center={p['center']} [{p['from']}, {p['to']}) predictability={pred}")
 
     if summary["missing"]:
         print(f"  없음: {', '.join(summary['missing'])}")
