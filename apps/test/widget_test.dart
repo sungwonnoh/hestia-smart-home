@@ -47,6 +47,9 @@ void main() {
     // 홈: Context Engine이 준 상태와 가전 상태
     expect(find.text('집에 있음'), findsOneWidget);
     expect(find.text('식사 완료'), findsOneWidget);
+    // 바깥 날씨 (Mock은 서울 고정. 가전 에어컨 24°C와 겹치지 않게 24.1°C)
+    expect(find.text('바깥 날씨 · 서울'), findsOneWidget);
+    expect(find.text('24.1°C'), findsOneWidget);
     // 가전 목록은 현재 상태·공간 아래에 있어 화면 밖일 수 있다. 스크롤해서 확인한다.
     await tester.scrollUntilVisible(
       find.text('24°C'),

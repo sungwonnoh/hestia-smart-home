@@ -12,6 +12,7 @@ import '../../models/context_state.dart';
 import '../../models/device.dart';
 import '../../models/medication.dart';
 import '../../models/notification_item.dart';
+import '../../models/weather.dart';
 import 'home_controller.dart';
 
 class HomePage extends StatefulWidget {
@@ -69,6 +70,8 @@ class _HomePageState extends State<HomePage> {
                       padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                       children: [
                         _ContextSection(hestiaContext: data.context),
+                        if (data.weather != null)
+                          _WeatherSection(weather: data.weather!),
                         _MedicationSection(
                           medications: data.medications,
                           onOpen: _openMedication,
@@ -309,6 +312,109 @@ class _ContextChip extends StatelessWidget {
 }
 
 /// 복약 카드. 등록 전에는 [추가하기]만, 등록 후에는 약 목록과 남은 기간.
+/// 바깥 날씨. RPi4가 기상청에서 받아 온 값을 보여주기만 한다.
+class _WeatherSection extends StatelessWidget {
+  const _WeatherSection({required this.weather});
+
+  final Weather weather;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final warnings = weather.warnings ?? const <WeatherWarning>[];
+    final details = WeatherLabels.details(weather);
+    final title = weather.locationName.isEmpty
+        ? '바깥 날씨'
+        : '바깥 날씨 · ${weather.locationName}';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionHeader(title),
+        HestiaCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(WeatherLabels.icon(weather),
+                      size: 40, color: theme.colorScheme.primary),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(WeatherLabels.temperature(weather),
+                            style: theme.textTheme.headlineSmall),
+                        if (details.isNotEmpty)
+                          Text(details, style: theme.textTheme.bodyMedium),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              if (warnings.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final w in warnings) _WeatherWarningChip(warning: w),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 8),
+              Text(
+                WeatherLabels.observed(weather, DateTime.now()),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: weather.stale
+                      ? HestiaColors.warning
+                      : HestiaColors.muted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _WeatherWarningChip extends StatelessWidget {
+  const _WeatherWarningChip({required this.warning});
+
+  final WeatherWarning warning;
+
+  @override
+  Widget build(BuildContext context) {
+    final severe = warning.isSevere;
+    final fg = severe ? HestiaColors.safety : HestiaColors.warning;
+    final bg =
+        severe ? HestiaColors.safetyContainer : HestiaColors.warningContainer;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.warning_amber_rounded, size: 20, color: fg),
+          const SizedBox(width: 4),
+          Text(
+            warning.name,
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(color: fg, fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MedicationSection extends StatelessWidget {
   const _MedicationSection({required this.medications, required this.onOpen});
 
