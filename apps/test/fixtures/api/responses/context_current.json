@@ -1,7 +1,7 @@
 {
   "activity": {
-    "state": "MEAL_DONE",
-    "since": 1791183417,
+    "state": "EATING",
+    "since": 1791683992,
     "confidence": 0.87,
     "factors": {
       "area": "kitchen",
@@ -10,13 +10,24 @@
   },
   "presence": {
     "area": "kitchen",
-    "since": 1791183417,
+    "since": 1791683992,
     "areas": {
       "living": false,
       "kitchen": true
     },
     "confidence": 0.9,
     "factors": {}
+  },
+  "day": {
+    "date": "2026-10-11",
+    "meals": [
+      1791665992,
+      1791683992
+    ],
+    "hydrations": [
+      1791680392
+    ],
+    "medications": []
   },
   "away": {
     "state": "HOME",

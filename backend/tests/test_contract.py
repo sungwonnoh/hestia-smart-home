@@ -98,4 +98,5 @@ def test_flutter_medication_request_is_stored_as_sent(hestia):
     res = hestia.post("/medications", json=sent)
     assert res.status_code == 201
     stored = hestia.get("/medications").json()[0]
-    assert {k: stored[k] for k in sent} == sent
+    # 서버는 쓰지 않는 schedule 값을 null 로 돌려준다 (FIXED 의 delayMin)
+    assert drop_nulls({k: stored[k] for k in sent}) == sent

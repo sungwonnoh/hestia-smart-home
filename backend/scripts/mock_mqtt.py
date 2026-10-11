@@ -71,9 +71,11 @@ def engine_messages() -> List[Message]:
         context("occupancy", state="SINGLE"),
         context("presence", area="kitchen", since=now,
                 areas={"living": False, "kitchen": True}, confidence=0.9),
-        context("activity", state="MEAL_PREP", since=now, confidence=0.72, factors=meal),
-        context("activity", state="EATING", since=now, confidence=0.84, factors=meal),
-        context("activity", state="MEAL_DONE", since=now, confidence=0.87, factors=meal),
+        context("activity", state="COOKING", since=now, confidence=0.72, factors=meal),
+        context("activity", state="EATING", since=now, confidence=0.87, factors=meal),
+        # 오늘 기록 (Context Engine DayState). state 없이 시각 목록만
+        context("day", date=time.strftime("%Y-%m-%d"), meals=[now - 5 * 3600, now],
+                hydrations=[now - 3600], medications=[]),
         ("hestia/notify/push", envelope(
             MOCK_ENGINE_SRC,
             notify_id=f"n-mock-{now}",

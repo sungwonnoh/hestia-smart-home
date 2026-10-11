@@ -138,7 +138,7 @@ void main() {
     api.routes['GET /api/v1/explanations/3'] = (200, {
       'id': '3',
       'contextName': 'activity',
-      'state': 'MEAL_DONE',
+      'state': 'EATING',
       'confidence': 0.87,
       'factors': [
         {'key': 'area', 'value': 'kitchen', 'label': '주방 재실 감지', 'satisfied': true},

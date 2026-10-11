@@ -29,17 +29,16 @@ class MedicationListController extends AsyncController<List<Medication>> {
   }
 }
 
-enum MedicationStep { name, slots, timing, days, refill, summary }
+enum MedicationStep { name, type, delay, times, days, refill, summary }
 
-/// 복약 추가·수정: 약 이름 → 하루 언제 → 식사 기준 → 며칠분 → 정기 처방 → 확인.
-///
-/// 자기 전만 고르면 식사 기준 단계는 건너뛴다.
+/// 복약 추가·수정: 약 이름 → 언제(식후/정해진 시각) → 식후 몇 분 또는 시각 → 며칠분 → 정기 처방 → 확인.
 class MedicationEditController extends ChangeNotifier {
   MedicationEditController(this._repository, {Medication? initial})
       : _initial = initial,
         _name = initial?.name ?? '',
-        _slots = {...?initial?.slots},
-        _timing = initial?.mealTiming,
+        _type = initial?.schedule.type,
+        _delay = initial?.schedule.delayMin,
+        _times = {...?initial?.schedule.times},
         _days = initial?.days,
         _refill = initial?.refillRequired;
 
@@ -48,12 +47,21 @@ class MedicationEditController extends ChangeNotifier {
   static const maxNameLength = 30;
   static const maxDays = 365;
 
+  /// 정해진 시각 단계의 빠른 선택.
+  static const timePresets = [
+    ('아침', '08:00'),
+    ('점심', '12:00'),
+    ('저녁', '18:00'),
+    ('자기 전', '22:00'),
+  ];
+
   final HestiaRepository _repository;
   final Medication? _initial;
 
   String _name;
-  final Set<DoseSlot> _slots;
-  MealTiming? _timing;
+  ScheduleType? _type;
+  int? _delay;
+  final Set<String> _times;
   int? _days;
   bool? _refill;
 
@@ -67,17 +75,21 @@ class MedicationEditController extends ChangeNotifier {
   String? get error => _error;
 
   String get name => _name;
-  Set<DoseSlot> get slots => Set.unmodifiable(_slots);
-  MealTiming? get timing => _timing;
+  ScheduleType? get type => _type;
+  int? get delay => _delay;
+
+  /// 하루 순서로 정렬된 시각.
+  List<String> get times => _times.toList()..sort();
   int? get days => _days;
   bool? get refill => _refill;
 
-  bool get needsMealTiming => _slots.any((s) => s.isMeal);
+  bool get canAddTime => _times.length < MedicationSchedule.maxTimes;
 
   List<MedicationStep> get steps => [
         MedicationStep.name,
-        MedicationStep.slots,
-        if (needsMealTiming) MedicationStep.timing,
+        MedicationStep.type,
+        if (_type != ScheduleType.fixed) MedicationStep.delay,
+        if (_type == ScheduleType.fixed) MedicationStep.times,
         MedicationStep.days,
         MedicationStep.refill,
         MedicationStep.summary,
@@ -92,8 +104,9 @@ class MedicationEditController extends ChangeNotifier {
   bool get canProceed => switch (_step) {
         MedicationStep.name =>
           _name.trim().isNotEmpty && _name.trim().length <= maxNameLength,
-        MedicationStep.slots => _slots.isNotEmpty,
-        MedicationStep.timing => _timing != null,
+        MedicationStep.type => _type != null,
+        MedicationStep.delay => _delay != null,
+        MedicationStep.times => _times.isNotEmpty,
         MedicationStep.days => _days != null,
         MedicationStep.refill => _refill != null,
         MedicationStep.summary => !_saving,
@@ -104,13 +117,19 @@ class MedicationEditController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void toggleSlot(DoseSlot slot) {
-    if (!_slots.remove(slot)) _slots.add(slot);
+  void setType(ScheduleType value) {
+    _type = value;
     notifyListeners();
   }
 
-  void setTiming(MealTiming value) {
-    _timing = value;
+  void setDelay(int minutes) {
+    _delay = minutes;
+    notifyListeners();
+  }
+
+  /// 있으면 빼고, 없으면 더한다 (하루 최대 [MedicationSchedule.maxTimes]개).
+  void toggleTime(String time) {
+    if (!_times.remove(time) && canAddTime) _times.add(time);
     notifyListeners();
   }
 
@@ -150,14 +169,14 @@ class MedicationEditController extends ChangeNotifier {
     notifyListeners();
   }
 
+  MedicationSchedule get schedule => _type == ScheduleType.fixed
+      ? MedicationSchedule.fixed(times)
+      : MedicationSchedule.afterMeal(delayMin: _delay ?? 30);
+
   Medication build() => Medication(
         id: _initial?.id ?? '',
         name: _name.trim(),
-        slots: [
-          for (final s in DoseSlot.values)
-            if (_slots.contains(s)) s,
-        ],
-        mealTiming: needsMealTiming ? _timing : null,
+        schedule: schedule,
         days: _days ?? 1,
         startDate: _initial?.startDate,
         endDate: _initial?.endDate,

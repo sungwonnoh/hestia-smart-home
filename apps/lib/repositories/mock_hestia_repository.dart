@@ -110,7 +110,7 @@ class MockHestiaRepository implements HestiaRepository, DemoControls {
         ),
         ContextName.activity: ContextState(
           name: ContextName.activity,
-          state: 'MEAL_DONE',
+          state: 'EATING',
           since: now.subtract(const Duration(minutes: 3)),
           confidence: 0.87,
           factors: const {'area': 'kitchen', 'presence': true},
@@ -124,9 +124,23 @@ class MockHestiaRepository implements HestiaRepository, DemoControls {
             'areas': {'living': true, 'kitchen': false},
           },
         ),
-        ContextName.wake: const ContextState(
-          name: ContextName.wake,
-          state: 'AWAKE',
+        // day는 state 없이 오늘 기록(epoch 초 목록)을 보낸다.
+        ContextName.day: ContextState(
+          name: ContextName.day,
+          attributes: {
+            'date': Medication.formatDate(now),
+            'meals': [
+              now.subtract(const Duration(hours: 5)).millisecondsSinceEpoch ~/
+                  1000,
+            ],
+            'hydrations': [
+              now.subtract(const Duration(hours: 2)).millisecondsSinceEpoch ~/
+                  1000,
+              now.subtract(const Duration(hours: 1)).millisecondsSinceEpoch ~/
+                  1000,
+            ],
+            'medications': const [],
+          },
         ),
         ContextName.occupancy: const ContextState(
           name: ContextName.occupancy,
@@ -284,8 +298,10 @@ class MockHestiaRepository implements HestiaRepository, DemoControls {
     return Medication(
       id: id,
       name: m.name.trim(),
-      slots: [for (final s in DoseSlot.values) if (m.slots.contains(s)) s],
-      mealTiming: m.needsMealTiming ? m.mealTiming : null,
+      // 서버처럼 시각은 하루 순서로 정렬하고 중복을 뺀다.
+      schedule: m.schedule.type == ScheduleType.fixed
+          ? MedicationSchedule.fixed(m.schedule.sortedTimes)
+          : MedicationSchedule.afterMeal(delayMin: m.schedule.delayMin ?? 30),
       days: m.days,
       startDate: start,
       endDate: DateTime(start.year, start.month, start.day + m.days - 1),
@@ -422,7 +438,7 @@ class MockHestiaRepository implements HestiaRepository, DemoControls {
     'exp-meal-done': Explanation(
       id: 'exp-meal-done',
       contextName: ContextName.activity,
-      state: 'MEAL_DONE',
+      state: 'EATING',
       confidence: 0.87,
       factors: [
         ExplanationFactor(label: '주방 재실 감지', detail: '식탁 mmWave'),

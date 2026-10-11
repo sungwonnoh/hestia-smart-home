@@ -46,7 +46,9 @@ void main() {
 
     // 홈: Context Engine이 준 상태와 가전 상태
     expect(find.text('집에 있음'), findsOneWidget);
-    expect(find.text('식사 완료'), findsOneWidget);
+    expect(find.text('식사 중'), findsOneWidget);
+    // wake 대신 day: 오늘 기록 개수
+    expect(find.text('오늘 식사 1번 · 물 2번'), findsOneWidget);
     // 바깥 날씨 (Mock은 서울 고정. 가전 에어컨 24°C와 겹치지 않게 24.1°C)
     expect(find.text('바깥 날씨 · 서울'), findsOneWidget);
     expect(find.text('24.1°C'), findsOneWidget);
@@ -111,11 +113,12 @@ void main() {
     await _tap(tester, find.text('혈압약'));
     await _tap(tester, find.text('다음'));
 
-    await _tap(tester, find.text('아침'));
-    await _tap(tester, find.text('저녁'));
+    // 아침·저녁만 먹는 약은 정해진 시각으로 등록한다
+    await _tap(tester, find.text('정해진 시각'));
     await _tap(tester, find.text('다음'));
 
-    await _tap(tester, find.text('식후 30분'));
+    await _tap(tester, find.text('아침'));
+    await _tap(tester, find.text('저녁'));
     await _tap(tester, find.text('다음'));
 
     await _tap(tester, find.text('30일'));
@@ -129,7 +132,7 @@ void main() {
 
     expect(find.text('복약 알림 추가하기'), findsNothing);
     expect(find.text('혈압약'), findsOneWidget);
-    expect(find.text('아침·저녁 · 식후 30분'), findsOneWidget);
+    expect(find.text('08:00 · 18:00'), findsOneWidget);
     expect(find.text('30일 남음'), findsOneWidget);
   });
 }

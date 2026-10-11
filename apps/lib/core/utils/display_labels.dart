@@ -16,24 +16,28 @@ abstract final class ContextLabels {
   static const _names = {
     ContextName.activity: '활동',
     ContextName.presence: '재실',
-    ContextName.wake: '기상',
+    ContextName.day: '오늘',
     ContextName.away: '외출',
     ContextName.occupancy: '인원',
     ContextName.suppression: '알림 억제',
   };
 
   static const _states = {
+    // away
     'AWAY': '외출 중',
     'HOME': '집에 있음',
+    // activity (Context Engine 10종)
     'SLEEPING': '수면 중',
+    'IN_BED_AWAKE': '침대에서 쉬는 중',
+    'IN_SOFA_AWAKE': '소파에서 쉬는 중',
+    'COOKING': '요리 중',
     'EATING': '식사 중',
-    'MEAL_PREP': '식사 준비 중',
-    'MEAL_DONE': '식사 완료',
-    'WORKING': '집중 중',
-    'IDLE': '휴식 중',
+    'KITCHEN_MISC': '주방에 있음',
+    'BATHROOM': '화장실 이용 중',
+    'WATCHING_TV': 'TV 보는 중',
+    // presence / occupancy / suppression
     'PRESENT': '재실 중',
     'ABSENT': '자리 비움',
-    'AWAKE': '깨어 있음',
     'SINGLE': '1명',
     'MULTI': '여러 명',
     'NONE': '없음',
@@ -50,18 +54,34 @@ abstract final class ContextLabels {
   static bool isFault(String state) => state == 'SENSOR_FAULT';
 
   /// 화면에 보일 문장. presence는 state가 없고 area를 보내므로 공간 이름으로 표시한다.
+  /// day도 state가 없어 오늘 기록 개수로 표시한다.
   static String describe(ContextState s) {
     final area = s.area;
     if (s.name == ContextName.presence && area != null) {
       return '${RoomLabels.name(area)}에 있음';
     }
+    if (s.name == ContextName.day) return day(s);
     return state(s.state);
+  }
+
+  /// "오늘 식사 2번 · 물 3번 · 약 1번". 0번인 항목은 빼고, 다 0이면 "오늘 기록 없음".
+  static String day(ContextState s) {
+    final parts = [
+      for (final (key, label) in const [
+        ('meals', '식사'),
+        ('hydrations', '물'),
+        ('medications', '약'),
+      ])
+        if (s.countOf(key) > 0) '$label ${s.countOf(key)}번',
+    ];
+    return parts.isEmpty ? '오늘 기록 없음' : '오늘 ${parts.join(' · ')}';
   }
 
   static IconData iconOf(ContextState s) {
     if (s.name == ContextName.presence && s.area != null) {
       return Icons.person_pin_circle_rounded;
     }
+    if (s.name == ContextName.day) return Icons.today_rounded;
     return icon(s.name, s.state);
   }
 
@@ -73,13 +93,20 @@ abstract final class ContextLabels {
         return Icons.directions_walk_rounded;
       case 'SLEEPING':
         return Icons.bedtime_rounded;
-      case 'EATING':
-      case 'MEAL_DONE':
-        return Icons.restaurant_rounded;
-      case 'MEAL_PREP':
+      case 'IN_BED_AWAKE':
+        return Icons.bed_rounded;
+      case 'IN_SOFA_AWAKE':
+        return Icons.weekend_rounded;
+      case 'COOKING':
         return Icons.soup_kitchen_rounded;
-      case 'WORKING':
-        return Icons.laptop_rounded;
+      case 'EATING':
+        return Icons.restaurant_rounded;
+      case 'KITCHEN_MISC':
+        return Icons.kitchen_rounded;
+      case 'BATHROOM':
+        return Icons.bathroom_rounded;
+      case 'WATCHING_TV':
+        return Icons.tv_rounded;
       case 'ABSENT':
         return Icons.person_off_rounded;
       case 'SENSOR_FAULT':
@@ -89,7 +116,7 @@ abstract final class ContextLabels {
     }
     return switch (contextName) {
       ContextName.presence => Icons.person_rounded,
-      ContextName.wake => Icons.wb_sunny_rounded,
+      ContextName.day => Icons.today_rounded,
       ContextName.occupancy => Icons.groups_rounded,
       ContextName.suppression => Icons.notifications_paused_rounded,
       ContextName.away => Icons.home_rounded,
@@ -194,6 +221,11 @@ class NotificationStyle {
 
   static IconData? _scenarioIcon(String scenario) => switch (scenario) {
         'MEDICATION_PROMPT' => Icons.medication_rounded,
+        'REFILL_PROMPT' => Icons.event_repeat_rounded,
+        'MEAL_PROMPT' => Icons.restaurant_rounded,
+        'HYDRATION_PROMPT' => Icons.water_drop_rounded,
+        'SLEEP_ROUTINE' => Icons.bedtime_rounded,
+        'COOKING_UNATTENDED' => Icons.soup_kitchen_rounded,
         'LAUNDRY_DONE' => Icons.local_laundry_service_rounded,
         'VISITOR' => Icons.door_front_door_rounded,
         'AIR_QUALITY' => Icons.air_rounded,
@@ -214,18 +246,22 @@ abstract final class MedicationLabels {
     return ('$left일 남음', false);
   }
 
-  static IconData slotIcon(DoseSlot slot) => switch (slot) {
-        DoseSlot.breakfast => Icons.wb_twilight_rounded,
-        DoseSlot.lunch => Icons.wb_sunny_rounded,
-        DoseSlot.dinner => Icons.dinner_dining_rounded,
-        DoseSlot.bedtime => Icons.bedtime_rounded,
+  static IconData typeIcon(ScheduleType type) => switch (type) {
+        ScheduleType.afterMeal => Icons.restaurant_rounded,
+        ScheduleType.fixed => Icons.schedule_rounded,
       };
 
-  static IconData timingIcon(MealTiming timing) => switch (timing) {
-        MealTiming.beforeMeal => Icons.no_meals_rounded,
-        MealTiming.rightAfterMeal => Icons.restaurant_rounded,
-        MealTiming.afterMeal30 => Icons.timer_rounded,
-      };
+  static IconData delayIcon(int minutes) =>
+      minutes == 0 ? Icons.restaurant_rounded : Icons.timer_rounded;
+
+  /// "HH:MM" → 시간대 아이콘 (새벽·아침 / 낮 / 저녁 / 밤).
+  static IconData timeIcon(String time) {
+    final hour = int.tryParse(time.split(':').first) ?? 0;
+    if (hour >= 4 && hour < 11) return Icons.wb_twilight_rounded;
+    if (hour >= 11 && hour < 17) return Icons.wb_sunny_rounded;
+    if (hour >= 17 && hour < 21) return Icons.dinner_dining_rounded;
+    return Icons.bedtime_rounded;
+  }
 }
 
 /// 바깥 날씨 표시 문구와 아이콘.

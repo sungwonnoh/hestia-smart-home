@@ -1,7 +1,9 @@
 {
   "name": "혈압약",
-  "slots": ["BREAKFAST", "DINNER"],
-  "mealTiming": "AFTER_MEAL_30MIN",
+  "schedule": {
+    "type": "FIXED",
+    "times": ["08:00", "20:00"]
+  },
   "days": 30,
   "refillRequired": true
 }

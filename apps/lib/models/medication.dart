@@ -1,14 +1,19 @@
-/// 약을 먹는 식사 기준.
-enum MealTiming {
-  beforeMeal('BEFORE_MEAL', '식전'),
-  rightAfterMeal('RIGHT_AFTER_MEAL', '식사 직후'),
-  afterMeal30('AFTER_MEAL_30MIN', '식후 30분');
+/// 복약 시점 종류.
+///
+/// Context Engine(#40)이 받는 두 가지뿐이다. 식전·자기 전·'아침·저녁만' 약은
+/// [fixed]로 시각을 정해 등록한다.
+enum ScheduleType {
+  /// 식후. 끼니를 고르지 않는다 — 엔진이 끼니마다(하루 최대 세 번) 알린다.
+  afterMeal('AFTER_MEAL', '식후'),
 
-  const MealTiming(this.wireName, this.label);
+  /// 정해진 시각.
+  fixed('FIXED', '정해진 시각');
+
+  const ScheduleType(this.wireName, this.label);
   final String wireName;
   final String label;
 
-  static MealTiming? fromWire(String? value) {
+  static ScheduleType? fromWire(String? value) {
     for (final t in values) {
       if (t.wireName == value) return t;
     }
@@ -16,38 +21,106 @@ enum MealTiming {
   }
 }
 
-/// 하루 중 약 먹는 때.
-enum DoseSlot {
-  breakfast('BREAKFAST', '아침', isMeal: true),
-  lunch('LUNCH', '점심', isMeal: true),
-  dinner('DINNER', '저녁', isMeal: true),
-  bedtime('BEDTIME', '자기 전', isMeal: false);
+/// 언제 약을 먹는가.
+class MedicationSchedule {
+  const MedicationSchedule.afterMeal({this.delayMin = 30})
+      : type = ScheduleType.afterMeal,
+        times = const [];
 
-  const DoseSlot(this.wireName, this.label, {required this.isMeal});
-  final String wireName;
-  final String label;
+  const MedicationSchedule.fixed(this.times)
+      : type = ScheduleType.fixed,
+        delayMin = null;
 
-  /// 식사와 연결되는 때. 자기 전은 식사 기준이 없다.
-  final bool isMeal;
+  final ScheduleType type;
 
-  static DoseSlot? fromWire(String? value) {
-    for (final s in values) {
-      if (s.wireName == value) return s;
-    }
-    return null;
+  /// 식후만. 식사가 끝나고 몇 분 뒤 (0 = 식사 직후).
+  final int? delayMin;
+
+  /// 정해진 시각만. "HH:MM".
+  final List<String> times;
+
+  /// 앱에서 고를 수 있는 식후 지연 (분).
+  static const afterMealDelays = [0, 30];
+
+  static const maxTimes = 6;
+
+  static String delayLabel(int minutes) =>
+      minutes == 0 ? '식사 직후' : '식후 $minutes분';
+
+  /// "식후 30분 · 끼니마다", "08:00 · 20:00"
+  String get label => switch (type) {
+        ScheduleType.afterMeal => '${delayLabel(delayMin ?? 30)} · 끼니마다',
+        ScheduleType.fixed => sortedTimes.join(' · '),
+      };
+
+  /// 하루 순서, 중복 없이.
+  List<String> get sortedTimes => ({...times}.toList()..sort());
+
+  /// 저장할 수 있는 상태인가.
+  bool get isComplete => switch (type) {
+        ScheduleType.afterMeal => delayMin != null,
+        ScheduleType.fixed =>
+          times.isNotEmpty && sortedTimes.length <= maxTimes,
+      };
+
+  /// 서버가 보내지 않거나 모르는 값이면 null.
+  static MedicationSchedule? fromJson(Object? json) {
+    if (json is! Map<String, dynamic>) return null;
+    return switch (ScheduleType.fromWire(json['type'] as String?)) {
+      ScheduleType.afterMeal => MedicationSchedule.afterMeal(
+          delayMin: (json['delayMin'] as num?)?.toInt() ?? 30),
+      ScheduleType.fixed => MedicationSchedule.fixed([
+          for (final t in json['times'] as List<dynamic>? ?? const [])
+            if (t is String) t,
+        ]),
+      null => null,
+    };
   }
+
+  /// 쓰지 않는 값은 보내지 않는다 (식후의 times, 정해진 시각의 delayMin).
+  Map<String, dynamic> toJson() => switch (type) {
+        ScheduleType.afterMeal => {
+            'type': type.wireName,
+            'delayMin': delayMin ?? 30,
+          },
+        ScheduleType.fixed => {
+            'type': type.wireName,
+            'times': sortedTimes,
+          },
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      other is MedicationSchedule &&
+      other.type == type &&
+      other.delayMin == delayMin &&
+      _sameList(other.sortedTimes, sortedTimes);
+
+  @override
+  int get hashCode => Object.hash(type, delayMin, Object.hashAll(sortedTimes));
+
+  static bool _sameList(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  /// (8, 5) → "08:05"
+  static String formatTime(int hour, int minute) =>
+      '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
 }
 
 /// 사용자가 등록한 복약 일정.
 ///
-/// 앱은 일정만 저장한다. 알림 시점(식사 감지, 평소 식사 시간 대체)은
+/// 앱은 일정만 저장한다. 알림 시점(식사 감지, 정해진 시각)은
 /// Context Engine이 판단한다.
 class Medication {
   const Medication({
     this.id = '',
     required this.name,
-    required this.slots,
-    this.mealTiming,
+    required this.schedule,
     required this.days,
     this.startDate,
     this.endDate,
@@ -60,11 +133,8 @@ class Medication {
   /// 약 이름 (예: 혈압약).
   final String name;
 
-  /// 하루 순서(아침 → 자기 전)로 정렬된 복용 시점.
-  final List<DoseSlot> slots;
-
-  /// 아침·점심·저녁이 있을 때만 쓴다.
-  final MealTiming? mealTiming;
+  /// 언제 먹는가.
+  final MedicationSchedule schedule;
 
   /// 며칠분.
   final int days;
@@ -80,17 +150,8 @@ class Medication {
 
   static const refillWarningDays = 3;
 
-  bool get needsMealTiming => slots.any((s) => s.isMeal);
-
-  /// "아침·저녁 · 식후 30분", 자기 전만 있으면 "자기 전".
-  String get scheduleLabel {
-    final when = [
-      for (final s in DoseSlot.values)
-        if (slots.contains(s)) s.label,
-    ].join('·');
-    final timing = needsMealTiming ? mealTiming?.label : null;
-    return timing == null ? when : '$when · $timing';
-  }
+  /// "식후 30분 · 끼니마다", "08:00 · 20:00"
+  String get scheduleLabel => schedule.label;
 
   /// 오늘을 포함해 남은 복용 일수. 기간이 끝났으면 0.
   int? remainingDays(DateTime now) {
@@ -109,31 +170,27 @@ class Medication {
 
   Medication copyWith({
     String? name,
-    List<DoseSlot>? slots,
-    MealTiming? mealTiming,
-    bool clearMealTiming = false,
+    MedicationSchedule? schedule,
     int? days,
     bool? refillRequired,
   }) =>
       Medication(
         id: id,
         name: name ?? this.name,
-        slots: slots ?? this.slots,
-        mealTiming: clearMealTiming ? null : mealTiming ?? this.mealTiming,
+        schedule: schedule ?? this.schedule,
         days: days ?? this.days,
         startDate: startDate,
         endDate: endDate,
         refillRequired: refillRequired ?? this.refillRequired,
       );
 
+  /// schedule을 읽을 수 없으면(모르는 type) 식후 30분으로 둔다.
+  /// 화면에서 고쳐 저장할 수 있게 목록에서 빼지 않는다.
   factory Medication.fromJson(Map<String, dynamic> json) => Medication(
         id: json['id'] as String,
         name: json['name'] as String,
-        slots: (json['slots'] as List<dynamic>? ?? const [])
-            .map((e) => DoseSlot.fromWire(e as String?))
-            .whereType<DoseSlot>()
-            .toList(),
-        mealTiming: MealTiming.fromWire(json['mealTiming'] as String?),
+        schedule: MedicationSchedule.fromJson(json['schedule']) ??
+            const MedicationSchedule.afterMeal(),
         days: json['days'] as int,
         startDate: _parseDate(json['startDate']),
         endDate: _parseDate(json['endDate']),
@@ -143,11 +200,7 @@ class Medication {
   /// 저장 요청 본문. id·endDate는 서버가 정하므로 보내지 않는다.
   Map<String, dynamic> toJson() => {
         'name': name.trim(),
-        'slots': [
-          for (final s in DoseSlot.values)
-            if (slots.contains(s)) s.wireName,
-        ],
-        'mealTiming': needsMealTiming ? mealTiming?.wireName : null,
+        'schedule': schedule.toJson(),
         'days': days,
         if (startDate != null) 'startDate': formatDate(startDate!),
         'refillRequired': refillRequired,
