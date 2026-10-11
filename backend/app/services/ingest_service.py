@@ -57,6 +57,10 @@ SUBSCRIPTIONS = (
 )
 
 
+# hestia/context/* 중 판단 결과가 아닌 것
+NOT_JUDGMENTS = frozenset({"suppression", "day"})
+
+
 class DropReason:
     DECODE = "decode"
     SCHEMA = "schema"
@@ -213,7 +217,8 @@ class IngestService:
         model = CONTEXT_SCHEMAS[name].model_validate(payload)
         self._cache.set_context(name, model, payload)
         domain = to_domain(model)
-        if name != "suppression":
+        # suppression 은 플래그 집합, day 는 하루 기록 — 판단 결과가 아니라 이력·설명에서 뺀다
+        if name not in NOT_JUDGMENTS:
             self._history.record_context(
                 name,
                 history_state(name, model),

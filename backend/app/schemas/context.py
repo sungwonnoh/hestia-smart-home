@@ -3,7 +3,7 @@
 Context 마다 구조가 달라 하나의 고정 schema 로 합치지 않는다.
 """
 
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 
 from pydantic import ConfigDict
 
@@ -25,15 +25,18 @@ class PresenceContext(MqttEnvelope):
     factors: Dict[str, Any] = {}
 
 
-class WakeContext(MqttEnvelope):
-    state: str
-    wake_t0: Optional[Number] = None
-    hydration_done: Optional[bool] = None
-    hydration_prompted: Optional[bool] = None
-    meal_done: Optional[bool] = None
-    meal_prompted: Optional[bool] = None
-    medication_done: Optional[bool] = None
-    medication_prompted: Optional[bool] = None
+class DayContext(MqttEnvelope):
+    """오늘 하루 기록. 추론이 아니라 기록이라 state·confidence·factors 가 없다.
+
+    Context Engine 이 기상 판정(wake)을 없애고 대신 보낸다. 목록은 각 활동 시각(epoch 초).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    date: str
+    meals: List[Number] = []
+    hydrations: List[Number] = []
+    medications: List[Number] = []
 
 
 class AwayContext(MqttEnvelope):
@@ -59,7 +62,7 @@ class SuppressionContext(MqttEnvelope):
 CONTEXT_SCHEMAS: Dict[str, Type[MqttEnvelope]] = {
     "activity": ActivityContext,
     "presence": PresenceContext,
-    "wake": WakeContext,
+    "day": DayContext,
     "away": AwayContext,
     "occupancy": OccupancyContext,
     "suppression": SuppressionContext,

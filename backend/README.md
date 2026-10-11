@@ -50,7 +50,7 @@ API 문서: http://localhost:8000/docs
 | GET/POST | `/api/v1/rooms` | 공간 조회/추가 (중복 409) |
 | GET | `/api/v1/devices` | 가전 + MQTT 최신 상태 (Flutter Device 형태) |
 | PUT | `/api/v1/devices/{id}` | 이름·종류·공간·`virtualId` 변경 |
-| GET | `/api/v1/context/current` | context 6종 최신값 (받은 것만) |
+| GET | `/api/v1/context/current` | context 6종 최신값 (받은 것만): activity, presence, day, away, occupancy, suppression |
 | GET | `/api/v1/notifications` | 알림 목록 (취소 제외, 최신순) |
 | POST | `/api/v1/notifications/{id}/ack` | `{"ackType": "SEEN"\|"DELIVERED"}` → DB 기록 + `hestia/notify/ack` 발행 |
 | GET | `/api/v1/explanations/latest` | 최신 판단 근거 (없으면 404) |
@@ -114,6 +114,17 @@ MQTT 에 (재)연결될 때도 다시 발행하므로 브로커가 꺼져 있던
 MQTT 는 Context Engine `parse_medications` 형식이다: snake_case, schedule `type` 은 소문자 `after_meal` / `fixed`.
 **엔진은 모르는 `type` 이 하나라도 있으면 목록 전체를 버리므로** 이 두 가지만 보낸다.
 REST 의 `refillRequired` 는 `refill_notice` 로 보낸다. 형식을 바꾸면 `version` 을 올린다.
+
+### 오늘 기록 (`day`)
+
+Context Engine 은 기상 판정(`wake`)을 없애고 `hestia/context/day` 를 보낸다.
+판단이 아니라 기록이라 `state` 가 없고, 각 활동 시각(epoch 초) 목록만 있다. 판단 근거(`/explanations`) 이력에는 남기지 않는다.
+
+```json
+"day": {"date": "2026-10-11", "meals": [1791665992, 1791683992], "hydrations": [1791680392], "medications": []}
+```
+
+앱은 개수로 "오늘 식사 2번 · 물 1번" 처럼 보여준다.
 
 ### 외부 날씨 (`/weather`)
 
