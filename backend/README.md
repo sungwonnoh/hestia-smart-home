@@ -71,37 +71,49 @@ Flutter 가전(`tv-01`)과 MQTT 장치(`vd-01`)는 `virtualId` 로 연결한다.
 
 ### 복약 일정
 
-홈에서 원하는 사용자만 등록한다 (최초 설정에는 없음). Backend 는 저장만 한다.
+홈에서 원하는 사용자만 등록한다 (최초 설정에는 없음). Backend 는 저장만 하고, 알림 시점은 Context Engine 이 판단한다 (#40).
 
 ```json
-{"name": "혈압약", "slots": ["BREAKFAST", "DINNER"], "mealTiming": "AFTER_MEAL_30MIN",
+{"name": "감기약", "schedule": {"type": "AFTER_MEAL", "delayMin": 30},
+ "days": 5, "startDate": "2026-10-09", "refillRequired": false}
+{"name": "혈압약", "schedule": {"type": "FIXED", "times": ["08:00", "20:00"]},
  "days": 30, "startDate": "2026-10-09", "refillRequired": true}
 ```
 
 | 필드 | 값 |
 |---|---|
-| `slots` | `BREAKFAST` 아침, `LUNCH` 점심, `DINNER` 저녁, `BEDTIME` 자기 전. 하루 순서로 정렬해 저장 |
-| `mealTiming` | `BEFORE_MEAL` 식전, `RIGHT_AFTER_MEAL` 식사 직후, `AFTER_MEAL_30MIN` 식후 30분. 아침·점심·저녁이 있으면 필수, 자기 전만 있으면 `null` |
+| `schedule.type` | `AFTER_MEAL` 식후 / `FIXED` 정해진 시각 |
+| `schedule.delayMin` | `AFTER_MEAL` 만. 식사가 끝나고 몇 분 뒤 (0~180, 비우면 30). 앱은 0 = 식사 직후, 30 = 식후 30분 |
+| `schedule.times` | `FIXED` 만. `HH:MM` 1~6개. 하루 순서로 정렬하고 중복은 뺀다 |
 | `days` | 며칠분 (1~365) |
 | `startDate` | 복용 시작일. 비우면 등록한 날, 수정 때 비우면 기존 값 유지 |
-| `refillRequired` | 주기적으로 처방받는 약 (앱이 남은 3일부터 "처방 확인" 표시) |
+| `refillRequired` | 주기적으로 처방받는 약 (앱이 남은 3일부터 "처방 확인" 표시, 엔진이 재처방 알림) |
 | `endDate` | 응답만. 마지막 복용일 = `startDate + days - 1` |
 
-알림 시점(식사 감지 후, 식사가 감지되지 않으면 평소 식사 시간)은 Context Engine 이 판단한다.
+- **식후 약은 끼니를 고르지 않는다.** 엔진이 그 사람의 끼니 구간(`meal_time.peaks`)에 하루 최대 세 번 건다.
+  끼니 구간에는 아침·저녁 같은 이름이 없기 때문이다. 감기약처럼 "하루 세 번 식후" 처방이 대상이다.
+- **'아침·저녁만', 식전, 자기 전 약은 `FIXED` 로 등록한다.**
+- 응답에서 쓰지 않는 값은 `null` / `[]` 다 (`FIXED` 의 `delayMin`, `AFTER_MEAL` 의 `times`).
+- 이전 형식(`slots` + `mealTiming`)으로 저장된 일정은 Backend 가 켜질 때 한 번 바꾼다.
+  아침·점심·저녁 모두 식사 직후/식후 30분이면 `AFTER_MEAL` 0/30분, 나머지는 끼니별 기본 시각의 `FIXED`
+  (아침 08:00, 점심 12:00, 저녁 18:00, 자기 전 22:00).
 
 일정이 바뀔 때마다(추가·수정·삭제) **전체 목록**을 `hestia/registry/medications` 에 retained 로 발행한다.
 MQTT 에 (재)연결될 때도 다시 발행하므로 브로커가 꺼져 있던 동안의 변경도 반영된다.
-일정이 없으면 빈 목록을 발행해 엔진이 이전 일정을 지우게 한다.
+일정이 없으면 빈 목록을 발행해 엔진이 이전 일정을 지우게 한다. 날짜는 엔진이 `end_date` 로 스스로 판단한다 (매일 보내지 않는다).
 
 ```json
 {"version": 1, "sent_ts": 1791500000, "src_id": "rpi5-api",
- "medications": [{"id": "med-08a0b745", "name": "혈압약", "slots": ["BREAKFAST", "DINNER"],
-                  "meal_timing": "AFTER_MEAL_30MIN", "days": 30, "start_date": "2026-10-09",
-                  "end_date": "2026-11-07", "refill_notice": true}]}
+ "medications": [
+   {"id": "med-08a0b745", "name": "감기약", "schedule": {"type": "after_meal", "delay_min": 30},
+    "start_date": "2026-10-09", "days": 5, "end_date": "2026-10-13", "refill_notice": false},
+   {"id": "med-3f91c2d0", "name": "혈압약", "schedule": {"type": "fixed", "times": ["08:00", "20:00"]},
+    "start_date": "2026-10-09", "days": 30, "end_date": "2026-11-07", "refill_notice": true}]}
 ```
 
-`medications` 항목은 다른 MQTT 메시지처럼 snake_case 다. REST 의 `refillRequired` 는
-`refill_notice` (남은 일수가 적을 때 처방 안내가 필요한 약)로 보낸다. 형식을 바꾸면 `version` 을 올린다.
+MQTT 는 Context Engine `parse_medications` 형식이다: snake_case, schedule `type` 은 소문자 `after_meal` / `fixed`.
+**엔진은 모르는 `type` 이 하나라도 있으면 목록 전체를 버리므로** 이 두 가지만 보낸다.
+REST 의 `refillRequired` 는 `refill_notice` 로 보낸다. 형식을 바꾸면 `version` 을 올린다.
 
 ### 외부 날씨 (`/weather`)
 

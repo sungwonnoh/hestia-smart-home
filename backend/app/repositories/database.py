@@ -12,7 +12,26 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Iterator, Sequence
 
-SCHEMA = """
+from ..schemas.medication import legacy_schedule
+
+# 마이그레이션에서도 쓴다 (executescript 는 열린 트랜잭션을 커밋해 버려서 execute 로 실행)
+MEDICATIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS medications (
+    id               TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    schedule_type    TEXT NOT NULL,
+    delay_min        INTEGER,
+    times            TEXT NOT NULL DEFAULT '',
+    days             INTEGER NOT NULL,
+    start_date       TEXT NOT NULL,
+    refill_required  INTEGER NOT NULL DEFAULT 0,
+    created_at       REAL NOT NULL,
+    updated_at       REAL NOT NULL
+)
+"""
+
+SCHEMA = (
+    """
 CREATE TABLE IF NOT EXISTS rooms (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
@@ -89,24 +108,18 @@ CREATE TABLE IF NOT EXISTS intervention_outcomes (
     metadata_json    TEXT
 );
 
--- 앱에서 등록한 복약 일정. slots 는 쉼표로 이은 값 (BREAKFAST,DINNER).
-CREATE TABLE IF NOT EXISTS medications (
-    id               TEXT PRIMARY KEY,
-    name             TEXT NOT NULL,
-    slots            TEXT NOT NULL,
-    meal_timing      TEXT,
-    days             INTEGER NOT NULL,
-    start_date       TEXT NOT NULL,
-    refill_required  INTEGER NOT NULL DEFAULT 0,
-    created_at       REAL NOT NULL,
-    updated_at       REAL NOT NULL
-);
+-- 앱에서 등록한 복약 일정.
+-- schedule_type 이 AFTER_MEAL 이면 delay_min, FIXED 면 times (쉼표로 이은 HH:MM, 예: 08:00,20:00).
+"""
+    + MEDICATIONS_TABLE
+    + """;
 
 CREATE TABLE IF NOT EXISTS app_meta (
     key    TEXT PRIMARY KEY,
     value  TEXT
 );
 """
+)
 
 
 class Database:
@@ -121,6 +134,7 @@ class Database:
         with self._lock:
             self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.executescript(SCHEMA)
+            _migrate_medications(self._conn)
 
     def query(self, sql: str, params: Sequence[Any] = ()) -> list[sqlite3.Row]:
         with self._lock:
@@ -148,3 +162,34 @@ class Database:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+def _migrate_medications(conn: sqlite3.Connection) -> None:
+    """이전 형식(slots, meal_timing)의 medications 를 schedule 형식으로 바꾼다.
+
+    식후 세 끼는 AFTER_MEAL, 나머지는 끼니별 기본 시각의 FIXED (schemas.medication.legacy_schedule).
+    SQLite 는 열을 바꿀 수 없어 새 테이블에 옮겨 담고 이름을 바꾼다.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(medications)")}
+    if "slots" not in cols:
+        return
+
+    rows = list(conn.execute("SELECT * FROM medications"))
+    conn.execute("BEGIN")
+    try:
+        conn.execute("ALTER TABLE medications RENAME TO medications_legacy")
+        conn.execute(MEDICATIONS_TABLE)
+        for r in rows:
+            type_, delay, times = legacy_schedule(r["slots"].split(","), r["meal_timing"])
+            conn.execute(
+                "INSERT INTO medications (id, name, schedule_type, delay_min, times, days, "
+                "start_date, refill_required, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (r["id"], r["name"], type_, delay, ",".join(times), r["days"],
+                 r["start_date"], r["refill_required"], r["created_at"], r["updated_at"]),
+            )
+        conn.execute("DROP TABLE medications_legacy")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
