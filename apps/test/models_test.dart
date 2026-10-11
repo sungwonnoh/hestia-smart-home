@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:hestia_flutter_test/core/utils/display_labels.dart';
 import 'package:hestia_flutter_test/models/context_state.dart';
 import 'package:hestia_flutter_test/models/device.dart';
 import 'package:hestia_flutter_test/models/explanation.dart';
@@ -71,7 +72,7 @@ void main() {
   test('Explanation factors는 List와 Map을 모두 받는다', () {
     final fromList = Explanation.fromJson({
       'contextName': 'activity',
-      'state': 'MEAL_DONE',
+      'state': 'EATING',
       'factors': [
         '주방 재실 감지',
         {'label': '식사 시간대와 일치', 'satisfied': false},
@@ -116,5 +117,33 @@ void main() {
   test('원룸 템플릿은 여러 role을 가진다', () {
     final studio = RoomTemplate.byId('studio')!.toRoom();
     expect(studio.roles, containsAll(['LIVING', 'SLEEP', 'MEAL']));
+  });
+
+  test('Context Engine activity 10종은 모두 한국어 문구가 있다', () {
+    const states = [
+      'SLEEPING', 'IN_BED_AWAKE', 'IN_SOFA_AWAKE', 'COOKING', 'EATING',
+      'KITCHEN_MISC', 'BATHROOM', 'WATCHING_TV', 'AWAY', 'UNKNOWN',
+    ];
+    for (final s in states) {
+      expect(ContextLabels.state(s), isNot(s), reason: s);
+    }
+  });
+
+  test('day는 state 없이 오늘 기록 개수로 표시한다', () {
+    final day = HestiaContext.fromJson({
+      'day': {
+        'date': '2026-10-11',
+        'meals': [1791700000, 1791720000],
+        'hydrations': [1791710000],
+        'medications': [],
+      },
+    })[ContextName.day]!;
+    expect(day.state, ContextState.unknown);
+    expect(ContextLabels.describe(day), '오늘 식사 2번 · 물 1번');
+
+    final empty = HestiaContext.fromJson({
+      'day': {'date': '2026-10-11', 'meals': [], 'hydrations': [], 'medications': []},
+    })[ContextName.day]!;
+    expect(ContextLabels.describe(empty), '오늘 기록 없음');
   });
 }

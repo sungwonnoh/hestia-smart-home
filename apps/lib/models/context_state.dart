@@ -24,13 +24,19 @@ class ContextState {
   /// Context Engine이 남긴 근거 원본. 구조가 바뀌어도 받을 수 있게 Map으로 둔다.
   final Map<String, dynamic> factors;
 
-  /// 위 필드 외의 값 (presence의 area/areas, wake의 진행 플래그 등).
+  /// 위 필드 외의 값 (presence의 area/areas, day의 meals/hydrations/medications 등).
   final Map<String, dynamic> attributes;
 
   /// presence가 보낸 현재 공간 id (예: kitchen).
   String? get area {
     final value = attributes['area'];
     return value is String && value.isNotEmpty ? value : null;
+  }
+
+  /// day가 보낸 오늘 기록의 개수 (meals / hydrations / medications). 없으면 0.
+  int countOf(String key) {
+    final value = attributes[key];
+    return value is List ? value.length : 0;
   }
 
   static const _knownKeys = {'state', 'since', 'confidence', 'factors'};
@@ -72,7 +78,10 @@ class ContextState {
 abstract final class ContextName {
   static const activity = 'activity';
   static const presence = 'presence';
-  static const wake = 'wake';
+
+  /// 오늘 하루 기록 (식사·수분·복약 시각 목록). 상태(state)가 없다.
+  /// Context Engine이 기상 판정(wake)을 없애고 대신 보낸다.
+  static const day = 'day';
   static const away = 'away';
   static const occupancy = 'occupancy';
   static const suppression = 'suppression';
@@ -82,7 +91,7 @@ abstract final class ContextName {
     away,
     activity,
     presence,
-    wake,
+    day,
     occupancy,
     suppression,
   ];
