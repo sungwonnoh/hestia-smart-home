@@ -284,8 +284,10 @@ class MockHestiaRepository implements HestiaRepository, DemoControls {
     return Medication(
       id: id,
       name: m.name.trim(),
-      slots: [for (final s in DoseSlot.values) if (m.slots.contains(s)) s],
-      mealTiming: m.needsMealTiming ? m.mealTiming : null,
+      // 서버처럼 시각은 하루 순서로 정렬하고 중복을 뺀다.
+      schedule: m.schedule.type == ScheduleType.fixed
+          ? MedicationSchedule.fixed(m.schedule.sortedTimes)
+          : MedicationSchedule.afterMeal(delayMin: m.schedule.delayMin ?? 30),
       days: m.days,
       startDate: start,
       endDate: DateTime(start.year, start.month, start.day + m.days - 1),

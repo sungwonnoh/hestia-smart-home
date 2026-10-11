@@ -198,8 +198,10 @@ void main() {
         expect(m.id, raw['id']);
         expect(m.name, raw['name']);
         // 모르는 값이 조용히 빠지지 않았는지 원본과 비교한다.
-        expect(m.slots.map((s) => s.wireName), raw['slots']);
-        expect(m.mealTiming?.wireName, raw['mealTiming']);
+        final schedule = raw['schedule'] as Map<String, dynamic>;
+        expect(m.schedule.type.wireName, schedule['type']);
+        expect(m.schedule.toJson(), _withoutNulls(schedule)..remove(
+            m.schedule.type == ScheduleType.fixed ? 'delayMin' : 'times'));
         expect(m.days, raw['days']);
         expect(Medication.formatDate(m.startDate!), raw['startDate']);
         expect(Medication.formatDate(m.endDate!), raw['endDate']);
@@ -292,8 +294,7 @@ void main() {
     test('복약 추가 JSON', () async {
       const draft = Medication(
         name: '혈압약',
-        slots: [DoseSlot.breakfast, DoseSlot.dinner],
-        mealTiming: MealTiming.afterMeal30,
+        schedule: MedicationSchedule.fixed(['20:00', '08:00']),
         days: 30,
         refillRequired: true,
       );

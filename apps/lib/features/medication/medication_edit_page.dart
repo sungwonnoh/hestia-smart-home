@@ -104,13 +104,17 @@ class _MedicationEditPageState extends State<MedicationEditPage> {
 
   static const _titles = {
     MedicationStep.name: ('무슨 약인가요?', '자주 드시는 약을 고르거나 직접 입력하세요.'),
-    MedicationStep.slots: (
-      '하루 중 언제 드세요?',
-      '아침·점심·저녁·자기 전 중 드시는 때를 모두 골라주세요.',
+    MedicationStep.type: (
+      '언제 드세요?',
+      '끼니마다 식후에 드시면 "식후", 그 밖에는 "정해진 시각"을 골라주세요.',
     ),
-    MedicationStep.timing: (
-      '식사 전후 언제 드세요?',
-      '약 봉투에 적힌 대로 골라주세요. (예: 식후 30분)',
+    MedicationStep.delay: (
+      '식사 후 언제 드세요?',
+      '약 봉투에 적힌 대로 골라주세요. 끼니마다(하루 최대 세 번) 알려드려요.',
+    ),
+    MedicationStep.times: (
+      '몇 시에 드세요?',
+      '드시는 시각을 모두 골라주세요. 식전·자기 전 약도 여기서 정해요.',
     ),
     MedicationStep.days: ('며칠분 약인가요?', '버튼으로 고르고 −/+로 조정하세요.'),
     MedicationStep.refill: ('주기적으로 처방받는 약인가요?', '약이 떨어지기 전에 알려드려요.'),
@@ -123,28 +127,36 @@ class _MedicationEditPageState extends State<MedicationEditPage> {
             field: _nameField,
             onPick: _pickName,
           ),
-        MedicationStep.slots => _ChoiceWrap(
+        MedicationStep.type => _ChoiceWrap(
             children: [
-              for (final slot in DoseSlot.values)
+              _ChoiceButton(
+                icon: MedicationLabels.typeIcon(ScheduleType.afterMeal),
+                label: ScheduleType.afterMeal.label,
+                caption: '감기약처럼 끼니마다',
+                selected: c.type == ScheduleType.afterMeal,
+                onTap: () => c.setType(ScheduleType.afterMeal),
+              ),
+              _ChoiceButton(
+                icon: MedicationLabels.typeIcon(ScheduleType.fixed),
+                label: ScheduleType.fixed.label,
+                caption: '아침·저녁만, 식전, 자기 전',
+                selected: c.type == ScheduleType.fixed,
+                onTap: () => c.setType(ScheduleType.fixed),
+              ),
+            ],
+          ),
+        MedicationStep.delay => _ChoiceWrap(
+            children: [
+              for (final minutes in MedicationSchedule.afterMealDelays)
                 _ChoiceButton(
-                  icon: MedicationLabels.slotIcon(slot),
-                  label: slot.label,
-                  selected: c.slots.contains(slot),
-                  onTap: () => c.toggleSlot(slot),
+                  icon: MedicationLabels.delayIcon(minutes),
+                  label: MedicationSchedule.delayLabel(minutes),
+                  selected: c.delay == minutes,
+                  onTap: () => c.setDelay(minutes),
                 ),
             ],
           ),
-        MedicationStep.timing => _ChoiceWrap(
-            children: [
-              for (final timing in MealTiming.values)
-                _ChoiceButton(
-                  icon: MedicationLabels.timingIcon(timing),
-                  label: timing.label,
-                  selected: c.timing == timing,
-                  onTap: () => c.setTiming(timing),
-                ),
-            ],
-          ),
+        MedicationStep.times => _TimesStep(controller: c),
         MedicationStep.days => _DaysStep(controller: c),
         MedicationStep.refill => _ChoiceWrap(
             children: [
@@ -169,6 +181,75 @@ class _MedicationEditPageState extends State<MedicationEditPage> {
 }
 
 // ------------------------------------------------------------------ steps
+
+/// 정해진 시각. 아침·점심·저녁·자기 전 빠른 선택과 직접 추가.
+class _TimesStep extends StatelessWidget {
+  const _TimesStep({required this.controller});
+
+  final MedicationEditController controller;
+
+  Future<void> _addTime(BuildContext context) async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: const TimeOfDay(hour: 8, minute: 0),
+      helpText: '약 드실 시각',
+    );
+    if (picked == null) return;
+    final time = MedicationSchedule.formatTime(picked.hour, picked.minute);
+    if (!controller.times.contains(time)) controller.toggleTime(time);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final c = controller;
+    final presetTimes = {
+      for (final (_, time) in MedicationEditController.timePresets) time,
+    };
+    final custom = [
+      for (final t in c.times)
+        if (!presetTimes.contains(t)) t,
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _ChoiceWrap(
+          children: [
+            for (final (label, time) in MedicationEditController.timePresets)
+              _ChoiceButton(
+                icon: MedicationLabels.timeIcon(time),
+                label: label,
+                caption: time,
+                selected: c.times.contains(time),
+                onTap: () => c.toggleTime(time),
+              ),
+            for (final time in custom)
+              _ChoiceButton(
+                icon: MedicationLabels.timeIcon(time),
+                label: time,
+                caption: '누르면 빠져요',
+                selected: true,
+                onTap: () => c.toggleTime(time),
+              ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        OutlinedButton.icon(
+          onPressed: c.canAddTime ? () => _addTime(context) : null,
+          icon: const Icon(Icons.more_time_rounded),
+          label: const Text('다른 시각 추가'),
+        ),
+        if (!c.canAddTime) ...[
+          const SizedBox(height: 8),
+          Text(
+            '하루 ${MedicationSchedule.maxTimes}번까지 정할 수 있어요.',
+            style: theme.textTheme.bodyMedium,
+          ),
+        ],
+      ],
+    );
+  }
+}
 
 class _NameStep extends StatelessWidget {
   const _NameStep({
@@ -281,9 +362,15 @@ class _Summary extends StatelessWidget {
     final m = controller.build();
     final rows = [
       (MedicationStep.name, '약 이름', m.name),
-      (MedicationStep.slots, '하루 언제', m.slots.map((s) => s.label).join(' · ')),
-      if (m.needsMealTiming)
-        (MedicationStep.timing, '식사 기준', m.mealTiming?.label ?? '-'),
+      (MedicationStep.type, '언제', m.schedule.type.label),
+      if (m.schedule.type == ScheduleType.afterMeal)
+        (
+          MedicationStep.delay,
+          '식사 후',
+          '${MedicationSchedule.delayLabel(m.schedule.delayMin ?? 30)} · 끼니마다',
+        ),
+      if (m.schedule.type == ScheduleType.fixed)
+        (MedicationStep.times, '시각', m.schedule.sortedTimes.join(' · ')),
       (MedicationStep.days, '기간', '${m.days}일분'),
       (MedicationStep.refill, '정기 처방', m.refillRequired ? '예' : '아니요'),
     ];
@@ -332,8 +419,10 @@ class _Summary extends StatelessWidget {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                '식사를 감지하면 약 드실 때 알려드려요. '
-                '식사가 감지되지 않으면 평소 식사 시간에 알려드려요.',
+                m.schedule.type == ScheduleType.afterMeal
+                    ? '식사를 마치시면 끼니마다(하루 최대 세 번) 알려드려요. '
+                        '식사를 거르시면 식사 알림에 함께 알려드려요.'
+                    : '정해진 시각마다 알려드려요.',
                 style: theme.textTheme.bodyMedium,
               ),
             ),

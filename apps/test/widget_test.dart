@@ -111,11 +111,12 @@ void main() {
     await _tap(tester, find.text('혈압약'));
     await _tap(tester, find.text('다음'));
 
-    await _tap(tester, find.text('아침'));
-    await _tap(tester, find.text('저녁'));
+    // 아침·저녁만 먹는 약은 정해진 시각으로 등록한다
+    await _tap(tester, find.text('정해진 시각'));
     await _tap(tester, find.text('다음'));
 
-    await _tap(tester, find.text('식후 30분'));
+    await _tap(tester, find.text('아침'));
+    await _tap(tester, find.text('저녁'));
     await _tap(tester, find.text('다음'));
 
     await _tap(tester, find.text('30일'));
@@ -129,7 +130,7 @@ void main() {
 
     expect(find.text('복약 알림 추가하기'), findsNothing);
     expect(find.text('혈압약'), findsOneWidget);
-    expect(find.text('아침·저녁 · 식후 30분'), findsOneWidget);
+    expect(find.text('08:00 · 18:00'), findsOneWidget);
     expect(find.text('30일 남음'), findsOneWidget);
   });
 }

@@ -214,18 +214,22 @@ abstract final class MedicationLabels {
     return ('$left일 남음', false);
   }
 
-  static IconData slotIcon(DoseSlot slot) => switch (slot) {
-        DoseSlot.breakfast => Icons.wb_twilight_rounded,
-        DoseSlot.lunch => Icons.wb_sunny_rounded,
-        DoseSlot.dinner => Icons.dinner_dining_rounded,
-        DoseSlot.bedtime => Icons.bedtime_rounded,
+  static IconData typeIcon(ScheduleType type) => switch (type) {
+        ScheduleType.afterMeal => Icons.restaurant_rounded,
+        ScheduleType.fixed => Icons.schedule_rounded,
       };
 
-  static IconData timingIcon(MealTiming timing) => switch (timing) {
-        MealTiming.beforeMeal => Icons.no_meals_rounded,
-        MealTiming.rightAfterMeal => Icons.restaurant_rounded,
-        MealTiming.afterMeal30 => Icons.timer_rounded,
-      };
+  static IconData delayIcon(int minutes) =>
+      minutes == 0 ? Icons.restaurant_rounded : Icons.timer_rounded;
+
+  /// "HH:MM" → 시간대 아이콘 (새벽·아침 / 낮 / 저녁 / 밤).
+  static IconData timeIcon(String time) {
+    final hour = int.tryParse(time.split(':').first) ?? 0;
+    if (hour >= 4 && hour < 11) return Icons.wb_twilight_rounded;
+    if (hour >= 11 && hour < 17) return Icons.wb_sunny_rounded;
+    if (hour >= 17 && hour < 21) return Icons.dinner_dining_rounded;
+    return Icons.bedtime_rounded;
+  }
 }
 
 /// 바깥 날씨 표시 문구와 아이콘.

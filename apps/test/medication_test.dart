@@ -9,41 +9,43 @@ void main() {
   final today = DateTime(2026, 10, 9);
 
   group('Medication 모델', () {
-    test('자기 전만 있으면 식사 기준을 보내지 않는다', () {
+    test('식후: delayMin만 보내고 끼니마다라고 표시한다', () {
       const m = Medication(
-        name: ' 수면제 ',
-        slots: [DoseSlot.bedtime],
-        mealTiming: MealTiming.beforeMeal,
-        days: 7,
+        name: ' 감기약 ',
+        schedule: MedicationSchedule.afterMeal(delayMin: 30),
+        days: 5,
       );
-      expect(m.needsMealTiming, isFalse);
-      expect(m.scheduleLabel, '자기 전');
+      expect(m.scheduleLabel, '식후 30분 · 끼니마다');
       expect(m.toJson(), {
-        'name': '수면제',
-        'slots': ['BEDTIME'],
-        'mealTiming': null,
-        'days': 7,
+        'name': '감기약',
+        'schedule': {'type': 'AFTER_MEAL', 'delayMin': 30},
+        'days': 5,
         'refillRequired': false,
       });
+      expect(
+        const MedicationSchedule.afterMeal(delayMin: 0).label,
+        '식사 직후 · 끼니마다',
+      );
     });
 
-    test('시점은 하루 순서로 보내고 라벨을 만든다', () {
+    test('정해진 시각: 하루 순서로 정렬하고 중복을 뺀다', () {
       const m = Medication(
         name: '혈압약',
-        slots: [DoseSlot.dinner, DoseSlot.breakfast],
-        mealTiming: MealTiming.afterMeal30,
+        schedule: MedicationSchedule.fixed(['20:00', '08:00', '20:00']),
         days: 30,
       );
-      expect(m.toJson()['slots'], ['BREAKFAST', 'DINNER']);
-      expect(m.toJson()['mealTiming'], 'AFTER_MEAL_30MIN');
-      expect(m.scheduleLabel, '아침·저녁 · 식후 30분');
+      expect(m.toJson()['schedule'], {
+        'type': 'FIXED',
+        'times': ['08:00', '20:00'],
+      });
+      expect(m.scheduleLabel, '08:00 · 20:00');
+      expect(MedicationSchedule.formatTime(8, 5), '08:05');
     });
 
     test('남은 일수와 처방 알림', () {
       Medication withEnd(DateTime end, {bool refill = true}) => Medication(
             name: '혈압약',
-            slots: const [DoseSlot.breakfast],
-            mealTiming: MealTiming.beforeMeal,
+            schedule: const MedicationSchedule.fixed(['08:00']),
             days: 30,
             endDate: end,
             refillRequired: refill,
@@ -64,21 +66,35 @@ void main() {
           ('복용 기간 끝 · 처방 확인', true));
     });
 
-    test('서버 응답을 읽는다', () {
-      final m = Medication.fromJson({
+    test('서버 응답을 읽는다 (쓰지 않는 값은 null / [])', () {
+      final fixed = Medication.fromJson({
         'id': 'med-1',
         'name': '당뇨약',
-        'slots': ['BREAKFAST', 'LUNCH'],
-        'mealTiming': 'BEFORE_MEAL',
+        'schedule': {'type': 'FIXED', 'delayMin': null, 'times': ['07:30', '18:30']},
         'days': 14,
         'startDate': '2026-10-09',
         'endDate': '2026-10-22',
         'refillRequired': true,
       });
-      expect(m.slots, [DoseSlot.breakfast, DoseSlot.lunch]);
-      expect(m.mealTiming, MealTiming.beforeMeal);
-      expect(m.startDate, DateTime(2026, 10, 9));
-      expect(m.endDate, DateTime(2026, 10, 22));
+      expect(fixed.schedule,
+          const MedicationSchedule.fixed(['07:30', '18:30']));
+      expect(fixed.startDate, DateTime(2026, 10, 9));
+      expect(fixed.endDate, DateTime(2026, 10, 22));
+
+      final after = Medication.fromJson({
+        'id': 'med-2',
+        'name': '감기약',
+        'schedule': {'type': 'AFTER_MEAL', 'delayMin': 0, 'times': []},
+        'days': 5,
+      });
+      expect(after.schedule, const MedicationSchedule.afterMeal(delayMin: 0));
+    });
+
+    test('시간대 아이콘', () {
+      expect(MedicationLabels.timeIcon('08:00'),
+          MedicationLabels.timeIcon('06:30'));
+      expect(MedicationLabels.timeIcon('22:00'),
+          isNot(MedicationLabels.timeIcon('08:00')));
     });
   });
 
@@ -94,18 +110,18 @@ void main() {
 
       final saved = await repo.addMedication(const Medication(
         name: '혈압약',
-        slots: [DoseSlot.dinner, DoseSlot.breakfast],
-        mealTiming: MealTiming.afterMeal30,
+        schedule: MedicationSchedule.fixed(['20:00', '08:00']),
         days: 30,
       ));
       expect(saved.id, isNotEmpty);
-      expect(saved.slots, [DoseSlot.breakfast, DoseSlot.dinner]);
+      expect(saved.schedule.times, ['08:00', '20:00']);
       expect(saved.startDate, today);
       expect(saved.endDate, DateTime(2026, 11, 7));
 
-      final updated = await repo.updateMedication(
-          saved.copyWith(slots: [DoseSlot.bedtime], days: 7));
-      expect(updated.mealTiming, isNull);
+      final updated = await repo.updateMedication(saved.copyWith(
+          schedule: const MedicationSchedule.afterMeal(delayMin: 0), days: 7));
+      expect(updated.schedule.type, ScheduleType.afterMeal);
+      expect(updated.schedule.delayMin, 0);
       expect(updated.startDate, today);
       expect(updated.endDate, DateTime(2026, 10, 15));
       expect(await repo.getMedications(), hasLength(1));
@@ -116,7 +132,9 @@ void main() {
 
     test('설정 초기화하면 복약도 지운다', () async {
       await repo.addMedication(const Medication(
-          name: '수면제', slots: [DoseSlot.bedtime], days: 7));
+          name: '수면제',
+          schedule: MedicationSchedule.fixed(['22:00']),
+          days: 7));
       await repo.resetSetup();
       expect(await repo.getMedications(), isEmpty);
     });
@@ -131,20 +149,7 @@ void main() {
       c = MedicationEditController(repo);
     });
 
-    test('식사 시점이 있으면 식사 기준 단계를 거친다', () async {
-      expect(c.canProceed, isFalse);
-      c.setName('혈압약');
-      c.next();
-      expect(c.step, MedicationStep.slots);
-
-      c.toggleSlot(DoseSlot.breakfast);
-      c.toggleSlot(DoseSlot.dinner);
-      c.next();
-      expect(c.step, MedicationStep.timing);
-      expect(c.canProceed, isFalse);
-      c.setTiming(MealTiming.afterMeal30);
-      c.next();
-
+    Future<Medication?> finish(MedicationEditController c) async {
       expect(c.step, MedicationStep.days);
       c.setDays(30);
       c.next();
@@ -153,23 +158,62 @@ void main() {
       c.next();
       expect(c.step, MedicationStep.summary);
       expect(c.stepNumber, c.steps.length);
+      return c.save();
+    }
 
-      final saved = await c.save();
-      expect(saved, isNotNull);
-      expect(saved!.mealTiming, MealTiming.afterMeal30);
-      expect((await repo.getMedications()).single.name, '혈압약');
+    test('식후: 식사 후 단계를 거치고 시각 단계는 없다', () async {
+      expect(c.canProceed, isFalse);
+      c.setName('감기약');
+      c.next();
+      expect(c.step, MedicationStep.type);
+      expect(c.canProceed, isFalse);
+
+      c.setType(ScheduleType.afterMeal);
+      c.next();
+      expect(c.step, MedicationStep.delay);
+      expect(c.steps, isNot(contains(MedicationStep.times)));
+      expect(c.canProceed, isFalse);
+      c.setDelay(30);
+      c.next();
+
+      final saved = await finish(c);
+      expect(saved!.schedule, const MedicationSchedule.afterMeal(delayMin: 30));
+      expect((await repo.getMedications()).single.name, '감기약');
     });
 
-    test('자기 전만 고르면 식사 기준 단계를 건너뛴다', () {
-      c.setName('수면제');
+    test('정해진 시각: 시각 단계를 거치고 식사 후 단계는 없다', () async {
+      c.setName('혈압약');
       c.next();
-      c.toggleSlot(DoseSlot.bedtime);
+      c.setType(ScheduleType.fixed);
       c.next();
-      expect(c.step, MedicationStep.days);
-      expect(c.steps, isNot(contains(MedicationStep.timing)));
+      expect(c.step, MedicationStep.times);
+      expect(c.steps, isNot(contains(MedicationStep.delay)));
+      expect(c.canProceed, isFalse);
+
+      c.toggleTime('20:00');
+      c.toggleTime('08:00');
+      c.toggleTime('12:00');
+      c.toggleTime('12:00'); // 다시 누르면 빠진다
+      expect(c.times, ['08:00', '20:00']);
+      c.next();
+
+      final saved = await finish(c);
+      expect(saved!.schedule, const MedicationSchedule.fixed(['08:00', '20:00']));
 
       expect(c.back(), isTrue);
-      expect(c.step, MedicationStep.slots);
+      expect(c.back(), isTrue);
+      expect(c.back(), isTrue);
+      expect(c.step, MedicationStep.times);
+    });
+
+    test('시각은 하루 6개까지', () {
+      for (final t in ['06:00', '08:00', '10:00', '12:00', '14:00', '16:00']) {
+        c.toggleTime(t);
+      }
+      expect(c.canAddTime, isFalse);
+      c.toggleTime('18:00');
+      expect(c.times, hasLength(MedicationSchedule.maxTimes));
+      expect(c.times, isNot(contains('18:00')));
     });
 
     test('일수 조정은 1~365일 안에서', () {
@@ -183,19 +227,21 @@ void main() {
       expect(c.back(), isFalse);
     });
 
-    test('수정하면 같은 id로 저장한다', () async {
+    test('수정하면 같은 id로 저장하고 기존 시각을 이어받는다', () async {
       final saved = await repo.addMedication(const Medication(
         name: '혈압약',
-        slots: [DoseSlot.breakfast],
-        mealTiming: MealTiming.beforeMeal,
+        schedule: MedicationSchedule.fixed(['08:00', '20:00']),
         days: 30,
       ));
       final edit = MedicationEditController(repo, initial: saved);
       expect(edit.isEditing, isTrue);
+      expect(edit.type, ScheduleType.fixed);
+      expect(edit.times, ['08:00', '20:00']);
       edit.setDays(14);
       final updated = await edit.save();
       expect(updated!.id, saved.id);
       expect(updated.days, 14);
+      expect(updated.schedule, saved.schedule);
       expect(await repo.getMedications(), hasLength(1));
     });
   });
